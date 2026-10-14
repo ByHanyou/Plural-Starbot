@@ -1,4 +1,4 @@
-// Pure proxy decisions: emoji and PluralKit-style tag matching, the backslash escape and autoproxy. No Discord or database imports.
+// Pure proxy decisions: emoji tag matching, the backslash escape and autoproxy. No Discord or database imports.
 import type {AppSettings, FrontState, Member} from '../../vault/types';
 import {orderFronters} from '../profiles/frontLogic';
 
@@ -39,24 +39,9 @@ export interface PlanInput {
 export const isProxyable = (m: Member | null | undefined): m is Member =>
   !!m && typeof m === 'object' && typeof m.id === 'string' && !!m.id && !m.deleted && !m.archived && !m.isCustomFront;
 
-/** A member's usable proxy tags (pkProxyTags), with null/missing sides as '' and blank tags dropped. */
-export const proxyTagsOf = (m: Member): ProxyTag[] => {
-  const raw: unknown = m.pkProxyTags;
-  if (!Array.isArray(raw)) return [];
-  const out: ProxyTag[] = [];
-  for (const t of raw) {
-    if (!t || typeof t !== 'object') continue;
-    const {prefix, suffix} = t as {prefix?: unknown; suffix?: unknown};
-    const tag = {prefix: typeof prefix === 'string' ? prefix : '', suffix: typeof suffix === 'string' ? suffix : ''};
-    if (!tag.prefix && !tag.suffix) continue;
-    out.push(tag);
-  }
-  return out;
-};
-
 /**
  * The text between the tags, or null when the message does not carry the tag.
- * Exact and case-sensitive. As in PluralKit, a message that is only the tag (spaces inside the
+ * Exact and case-sensitive. A message that is only the tag (spaces inside the
  * tag trimmed away by Discord) matches with empty inner text, for attachment-only messages.
  */
 export const innerText = (input: string, tag: ProxyTag): string | null => {
@@ -67,23 +52,6 @@ export const innerText = (input: string, tag: ProxyTag): string | null => {
   }
   const bare = prefix.trimEnd() + suffix.trimStart();
   if (bare && input.trim() === bare) return '';
-  return null;
-};
-
-/** Longest total tag (prefix + suffix) wins; ties keep member order, then tag order. */
-export const matchTags = (input: string, members: Member[]): TagMatch | null => {
-  const pairs: {member: Member; tag: ProxyTag}[] = [];
-  for (const member of members) {
-    if (!isProxyable(member)) continue;
-    for (const tag of proxyTagsOf(member)) pairs.push({member, tag});
-  }
-  // Array.prototype.sort is stable, so equal lengths keep their order.
-  pairs.sort((a, b) => b.tag.prefix.length + b.tag.suffix.length - (a.tag.prefix.length + a.tag.suffix.length));
-  for (const {member, tag} of pairs) {
-    const inner = innerText(input, tag);
-    if (inner === null) continue;
-    return {member, tag, content: (member.pkKeepProxy === true ? input : inner).trim()};
-  }
   return null;
 };
 
@@ -178,22 +146,16 @@ export const autoproxyMember = (
 
 /**
  * Decides what to do with one message from a linked user.
- * Backslash first (never proxied), then an emoji tag, then a PluralKit-style tag, then autoproxy.
+ * Backslash first (never proxied), then an emoji tag, then autoproxy.
  * Nothing is proxied when there would be neither text nor attachments to post, or when the message is
  * only an emoji tag and has no attachments.
  */
 export const planProxy = (i: PlanInput): ProxyPlan => {
   if (i.content.charCodeAt(0) === BACKSLASH) return {kind: 'escaped', content: i.content.slice(1)};
-  // When an emoji tag matches, the PluralKit-style tags are not looked at.
   const emoji = matchEmojiTags(i.content, i.members, i.front, i.settings);
   if (emoji) {
     if (!emoji.inner && !i.hasAttachments) return {kind: 'none'};
     return {kind: 'proxy', via: 'tag', member: emoji.member, content: emoji.content};
-  }
-  const tagged = matchTags(i.content, i.members);
-  if (tagged) {
-    if (!tagged.content && !i.hasAttachments) return {kind: 'none'};
-    return {kind: 'proxy', via: 'tag', member: tagged.member, content: tagged.content};
   }
   const auto = autoproxyMember(i.autoproxy, i.members, i.front, i.settings);
   if (!auto) return {kind: 'none'};

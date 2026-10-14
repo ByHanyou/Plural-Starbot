@@ -21,7 +21,7 @@ The bot never stores your cloud password. It does not store your vault contents 
 
 ## 2. What the bot processes without storing
 
-- **Message content.** The bot receives the content of messages in the servers it is in (Discord's Message Content intent). It only acts on a message when it matches one of your proxy tags or your autoproxy setting; that message is deleted and its content re-posted through a webhook. Messages that do not match are not kept.
+- **Message content.** The bot receives the content of messages in the servers it is in (Discord's Message Content intent). It only acts on a message when it starts or ends with one of your members' emoji or your autoproxy setting applies; that message is deleted and its content re-posted through a webhook. Messages that do not match are not kept.
 - **Attachments.** Files on a proxied message are re-uploaded with the proxied message and then not kept.
 - **Avatars.** To show a member's avatar on a proxied message, the bot serves that avatar image from your vault over HTTPS at an unguessable address. Anyone who has the address can view the image, as with any Discord avatar.
 - **Vault writes.** When you change the front with the bot's commands, the bot writes the new front and the matching history entry into your vault, exactly as the Plural Star app would.

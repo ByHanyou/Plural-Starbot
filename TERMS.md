@@ -9,12 +9,12 @@ By adding the bot to a Discord server, linking a Plural Star cloud vault to it, 
 ## 1. What the bot does
 
 - **Health reminders.** On a schedule configured by server moderators, the bot posts reminders to chosen roles in a chosen channel.
-- **Proxying.** When a message you send matches one of your members' proxy tags, or when autoproxy is on, the bot deletes your message and re-posts its content through a webhook under that member's name and avatar.
+- **Proxying.** When a message you send starts or ends with one of your members' emoji, or when autoproxy is on, the bot deletes your message and re-posts its content through a webhook under that member's name and avatar.
 - **Profiles.** `/system` and `/member` show system and member profiles.
 - **Front.** `/front` shows and changes who is fronting.
 - **Moderation log.** Server moderators can choose a channel where every proxied message is logged with its sender.
 
-Profiles, proxy tags, avatars and the current front come from your Plural Star cloud vault. The bot does not have its own member registry.
+Profiles, emoji, avatars and the current front come from your Plural Star cloud vault. The bot does not have its own member registry.
 
 ## 2. Linking a vault
 

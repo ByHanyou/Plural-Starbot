@@ -3,7 +3,7 @@
 The Discord bot for Plural Star. It does two things:
 
 - **Health reminders.** On a schedule the server sets, it pings chosen roles with a warm nudge about eating, drinking, taking meds, moving, resting your eyes, hygiene, or kindness, each with a related fact. Six reminder groups, each with its own role, schedule and colour, all configured in Discord with `/health`.
-- **Proxying for plural systems.** Link your Plural Star cloud vault once, and the bot proxies your messages as your members (PluralKit style: proxy tags, or autoproxy by whoever is fronting), shows system and member profiles, and lets you change the front from Discord. Everything comes from the vault; there is nothing to register in the bot.
+- **Proxying for plural systems.** Link your Plural Star cloud vault once, and the bot proxies your messages as your members (by each member's emoji, or autoproxy by whoever is fronting), shows system and member profiles, and lets you change the front from Discord. Everything comes from the vault; there is nothing to register in the bot.
 
 Terms of Service: https://github.com/ByHanyou/Plural-Starbot/blob/main/TERMS.md
 Privacy Policy: https://github.com/ByHanyou/Plural-Starbot/blob/main/PRIVACY.md
@@ -51,8 +51,7 @@ Send the bot a direct message and run `/link`; it asks for your Plural Star clou
 
 ### Proxying
 
-- A message that starts or ends with one of your members' proxy tags (the same tags Plural Star imported from PluralKit, or set in the member's profile) is deleted and re-posted as that member.
-- A member's **Emoji** field in their Plural Star profile (up to three emoji) is also a tag: a message that starts or ends with it is proxied as that member. Emoji tags win over PluralKit-style tags. If several members share the same emoji, the one currently fronting is used (first listed), otherwise the first of them in your member list.
+- A member's **Emoji** field in their Plural Star profile (up to three emoji) is their proxy tag: a message that starts or ends with it is deleted and re-posted as that member. If several members share the same emoji, the one currently fronting is used (first listed), otherwise the first of them in your member list.
 - `/autoproxy front` proxies every message as the first listed primary fronter; `/autoproxy member <name>` as a fixed member; `/autoproxy off` turns it off. A message with an explicit tag always wins.
 - React ❌ to a proxied message of yours to delete it, ❓ to see who sent it (private reply). `/proxy edit` edits your last proxied message, or one you point at by message ID.
 - Attachments, replies and embeds are carried over.
@@ -62,7 +61,7 @@ Send the bot a direct message and run `/link`; it asks for your Plural Star clou
 | Command | What it shows |
 |---|---|
 | `/system [@user]` | System card: name, description, member count, linked account, avatar and banner |
-| `/member <name> [@user]` | Member card: display name, pronouns, role, colour, proxy tags, groups, description, avatar and banner |
+| `/member <name> [@user]` | Member card: display name, pronouns, role, colour, emoji, groups, description, avatar and banner |
 | `/front show [@user]` | Who is fronting, by tier, with how long |
 | `/front set|add|remove|clear` | Change the front. `tier` picks primary, co-front or co-conscious. Behaves exactly like Set Front in the app: history entry, start times, tiers |
 

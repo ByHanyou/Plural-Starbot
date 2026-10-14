@@ -2,7 +2,6 @@
 // SystemProfileCard and the Front tab. Pure: builds plain embed JSON; no Discord runtime imports.
 import type {APIEmbed, APIEmbedField} from 'discord.js';
 import type {AppSettings, CustomFieldDef, FrontState, FrontTier, Member, MemberGroup, SystemInfo} from '../../vault/types';
-import {proxyTagsOf} from '../proxy/match';
 import {ellipsize, embedColor} from '../proxy/text';
 import {fmtDur, frontSessionStart, nameCompare, orderFronters, tierName, TIER_ORDER, translateMood} from './frontLogic';
 import {isRosterMember, visibleMembers} from './lookup';
@@ -184,9 +183,8 @@ const CUSTOM_FIELDS = '**Custom Fields**';
  * above the card. The card: avatar and name; then in the description, in the app's order, pronouns,
  * role, the colour and emoji chips, tags, groups, Linked Sub-systems (vault owner only),
  * "Description / Bio" with the bio (up to Discord's 4096 characters), and the "Custom Fields" heading;
- * the custom fields follow as fields in the system's field order. Proxy tags (not in the app's
- * profile; listed in the README) come last. A custom front is a status card (name, colour,
- * description); a facet is labelled "Facet".
+ * the custom fields follow as fields in the system's field order. A custom front is a status card
+ * (name, colour, description); a facet is labelled "Facet".
  */
 export const memberCard = (i: MemberCardInput): APIEmbed[] => {
   const m = i.member;
@@ -237,17 +235,15 @@ export const memberCard = (i: MemberCardInput): APIEmbed[] => {
     const f = text ? field(str(fd.name) || '-', text) : null;
     if (f) custom.push(f);
   }
-  const proxyTags = proxyTagsOf(m).map(t => chip(`${t.prefix}text${t.suffix}`));
-  const proxyField = proxyTags.length ? field('Proxy tags', proxyTags.join(' ')) : null;
 
   const heading = custom.length ? CUSTOM_FIELDS : '';
   const body = capText(sections.join('\n\n'), LIMIT.description - (heading ? heading.length + 2 : 0));
   const description = [body, heading].filter(Boolean).join('\n\n');
   if (description) e.description = description;
 
-  e.fields = proxyField ? [...custom, proxyField] : [...custom];
+  e.fields = [...custom];
   const footer = m.isFacet ? 'Facet' : '';
-  const dropped = fitFields(e, footer.length + 40, proxyField ? 1 : 0);
+  const dropped = fitFields(e, footer.length + 40);
   if (heading && !(e.fields || []).some(f => custom.includes(f))) {
     // Every custom field had to be left out: no heading over nothing.
     if (body) e.description = body;
