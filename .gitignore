@@ -1,0 +1,37 @@
+# Secrets
+.env
+
+# Runtime data written by the bot (per deployment, never committed)
+settings.json
+content_memory.json
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.db
+*.db-wal
+*.db-shm
+
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# Stray binaries
+cmd.exe
+
+# Working notes (never part of the repository)
+SPEC.md
+SPEC*.md
+NOTES.md
+*.notes.md
+notes/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
