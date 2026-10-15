@@ -13,7 +13,7 @@ The bot keeps as little as it can. On its own server it stores:
 | Data | Why | Kept until |
 |---|---|---|
 | Your Discord user ID together with the vault link record: the key and authentication secret derived from your Plural Star cloud password, the vault's lookup ID, the manifest version, link and last-check timestamps, and the list of vault entries the bot holds with their content hashes | To open your vault, act as one of its devices, and know what has changed since its last check | You run `/unlink` |
-| Per-server settings chosen by moderators: reminder channel, roles, schedule and timezone, plus the reminder bot's two-day memory of which nudges and facts it has posted; proxy log channel; autoproxy settings per user | To run reminders, proxying and logging the way the server configured them | The setting is changed or the bot leaves the server |
+| Per-server settings chosen by moderators: reminder channel, roles, schedule and timezone, plus the reminder bot's two-day memory of which nudges and facts it has posted; proxy log channel; per user: autoproxy settings, proxy display-name format and Sys Tag (a global default and any per-server override) | To run reminders, proxying and logging the way the server configured them | The setting is changed or the bot leaves the server |
 | For each proxied message: the new message ID, the original message ID, the server, the channel, the member, your user ID and the time | So that you can edit or delete a proxied message and so moderators can see who sent it | 7 days, then deleted automatically |
 | Operational logs on the bot's server, which can include Discord user IDs, server names and error details, never message content or vault contents | To diagnose problems | Rotated with the server's logs |
 

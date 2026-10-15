@@ -17,9 +17,10 @@ import {log} from '../../log';
 import {hasStoredLink, linkedSession, peekSession} from '../../vault/registry';
 import type {VaultSession} from '../../vault/session';
 import {MEDIA_KEYS, Member} from '../../vault/types';
-import {displayNameOf, planProxy} from './match';
+import {DEFAULT_FORMAT, proxyNameFor} from './format';
+import {planProxy} from './match';
 import {postProxyLog} from './proxylog';
-import {getAutoproxy} from './settings';
+import {getAutoproxy, getNameSettings} from './settings';
 import {
   allowedMentionsFor,
   AllowedMentions,
@@ -27,7 +28,6 @@ import {
   embedColor,
   planAttachments,
   replyQuote,
-  sanitizeWebhookName,
   splitContent,
   tooLargeNote,
   uploadLimitBytes,
@@ -39,8 +39,8 @@ import {warnHourly} from './warn';
 const REPLY_MARK = ' ' + String.fromCharCode(0x2003, 0x21a9, 0xfe0f);
 const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
 
-/** The webhook username for a member: its name (nickname only when the name is blank), sanitised for Discord. */
-export const webhookUsername = (m: Member): string => sanitizeWebhookName(displayNameOf(m));
+/** The webhook username for a member: the sender's proxy name format filled from the member's profile, sanitised for Discord. */
+export const webhookUsername = (m: Member, format: string = DEFAULT_FORMAT, sysTag = ''): string => proxyNameFor(m, format, sysTag);
 
 /** The member's avatar URL on the bot's avatar server, if the vault holds one. */
 export const memberAvatarUrl = (session: VaultSession, m: Member): string | undefined => avatarUrlFor(session, MEDIA_KEYS.memberAvatar(m.id));
@@ -123,7 +123,8 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
   const chunks = splitContent(body);
   if (!chunks.length && !files.length) return;
 
-  const username = webhookUsername(member);
+  const names = getNameSettings(message.guildId, message.author.id);
+  const username = webhookUsername(member, names.format.value, names.sysTag.value);
   const avatarURL = memberAvatarUrl(session, member);
   const allowedMentions = mentionsFor(body, message.channel, message.member);
   const flags: ('SuppressEmbeds' | 'SuppressNotifications')[] = [];

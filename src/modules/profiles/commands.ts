@@ -27,12 +27,12 @@ export const memberCommand = new SlashCommandBuilder()
   .setName('member')
   .setDescription("Show a member's profile")
   .addStringOption(o => o.setName('name').setDescription('Member name or nickname').setRequired(true).setMaxLength(100))
-  .addUserOption(o => o.setName('user').setDescription('Whose system (default: yours)'));
+  .addUserOption(o => o.setName('user').setDescription("Leave empty for your own system; pick someone to view theirs"));
 
 export const systemCommand = new SlashCommandBuilder()
   .setName('system')
   .setDescription("Show a system's profile")
-  .addUserOption(o => o.setName('user').setDescription('Whose system (default: yours)'));
+  .addUserOption(o => o.setName('user').setDescription("Leave empty for your own system; pick someone to view theirs"));
 
 export const frontCommand = new SlashCommandBuilder()
   .setName('front')
@@ -41,7 +41,7 @@ export const frontCommand = new SlashCommandBuilder()
     s
       .setName('show')
       .setDescription('Who is fronting, by tier, with how long')
-      .addUserOption(o => o.setName('user').setDescription('Whose system (default: yours)')),
+      .addUserOption(o => o.setName('user').setDescription("Leave empty for your own system; pick someone to view theirs")),
   )
   .addSubcommand(s =>
     s

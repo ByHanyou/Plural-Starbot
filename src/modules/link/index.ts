@@ -19,6 +19,7 @@ import {log} from '../../log';
 import {dropSession, getSession, hasStoredLink, peekSession} from '../../vault/registry';
 import {LINK_BROKEN_TEXT, type LinkStage} from '../../vault/session';
 import {linkAttempts} from '../../vault/throttle';
+import {forgetNameSettings} from '../proxy/settings';
 import type {BotModule} from '../types';
 
 const MODAL_ID = 'link:password';
@@ -205,6 +206,7 @@ const handleUnlinkButton = async (i: ButtonInteraction): Promise<void> => {
     const session = await getSession(i.user.id);
     const result = await session.unlink();
     dropSession(i.user.id);
+    forgetNameSettings(i.user.id);
     log.info('User %s unlinked their vault%s.', i.user.id, result.deviceRemoved ? '' : ' (device removal failed)');
     await i.editReply({
       content: result.deviceRemoved

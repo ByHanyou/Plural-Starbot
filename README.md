@@ -55,15 +55,18 @@ Send the bot a direct message and run `/link`; it asks for your Plural Star clou
 - `/autoproxy front` proxies every message as the first listed primary fronter; `/autoproxy member <name>` as a fixed member; `/autoproxy off` turns it off. A message with an explicit tag always wins.
 - React ❌ to a proxied message of yours to delete it, ❓ to see who sent it (private reply). `/proxy edit` edits your last proxied message, or one you point at by message ID.
 - Attachments, replies and embeds are carried over.
+- **Display name.** By default a proxied message is posted under the member's name. `/proxy format <template>` changes that using formatting tags filled from the member's profile: `{Emoji}`, `{Name}`, `{Pronouns}`, `{Role}` and `{Sys Tag}`; anything else in the template is kept as typed, and empty values disappear cleanly (for example `{Emoji} {Name} ({Pronouns}) | {Sys Tag}`). `/proxy systag <text>` sets your Sys Tag (20 characters max); `/proxy systag clear` removes it. Both commands take a `scope`: **everywhere** (your default) or **this server** (an override for the server you run it in). Run either without a value to see what is in effect and a preview.
 
 ### Profiles and front
 
+All of these work on your own vault with nothing extra typed: the bot knows which vault is yours from the DM link. The optional `@user` at the end is only for looking at **someone else's** linked system (their private members stay hidden).
+
 | Command | What it shows |
 |---|---|
-| `/system [@user]` | System card: name, description, member count, linked account, avatar and banner |
-| `/member <name> [@user]` | Member card: display name, pronouns, role, colour, emoji, groups, description, avatar and banner |
-| `/front show [@user]` | Who is fronting, by tier, with how long |
-| `/front set|add|remove|clear` | Change the front. `tier` picks primary, co-front or co-conscious. Behaves exactly like Set Front in the app: history entry, start times, tiers |
+| `/system` (optionally `@user`) | System card: name, description, member count, linked account, avatar and banner |
+| `/member <name>` (optionally `@user`) | Member card: display name, pronouns, role, colour, emoji, groups, description, avatar and banner |
+| `/front show` (optionally `@user`) | Who is fronting, by tier, with how long |
+| `/front set`, `/front add`, `/front remove`, `/front clear` | Change the front. `set` and `add` take `member` and `tier` (primary, cofront or coconscious; default primary); `remove` takes a member; `clear` empties every tier. Behaves exactly like Set Front in the app: history entry, start times, tiers |
 
 Members marked private in Plural Star are shown only to their own system and are never named in front displays to others.
 

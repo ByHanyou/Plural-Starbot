@@ -1,29 +1,35 @@
-// /autoproxy, /proxy edit and /proxylog.
+// /autoproxy, /proxy (edit, format, systag) and /proxylog.
 import {
+  ApplicationIntegrationType,
   AutocompleteInteraction,
   ChannelType,
   ChatInputCommandInteraction,
   escapeMarkdown,
   GuildTextBasedChannel,
+  InteractionContextType,
   MessageFlags,
   PermissionFlagsBits,
   RESTJSONErrorCodes,
   SlashCommandBuilder,
+  SlashCommandStringOption,
 } from 'discord.js';
 import {CloudError} from '../../cloud/cloudTypes';
 import {db} from '../../db';
 import {log} from '../../log';
 import {linkedSession, peekSession} from '../../vault/registry';
 import {LINK_BROKEN_TEXT, type VaultSession} from '../../vault/session';
+import {DEFAULT_FORMAT, FORMAT_MAX_LENGTH, parseFormatInput, parseSysTagInput, proxyNameFor, SettingSource, usesSysTag} from './format';
 import {displayNameOf, findMember, firstPrimaryFronter, isProxyable} from './match';
 import {mentionsFor} from './proxy';
-import {setAutoproxy, setLogChannel} from './settings';
+import {getNameSettings, NameSettings, setAutoproxy, setLogChannel, setNameFormat, setSysTag} from './settings';
 import {ellipsize, MESSAGE_LIMIT} from './text';
 import {forgetWebhook, isApiError, targetOf, webhookFor} from './webhooks';
 
 const NOT_LINKED = 'No Plural Star vault is linked to your Discord account. Send me a direct message and run `/link` first.';
 const SERVER_ONLY = 'This command only works in a server.';
 const MISSING_PERMISSION = '❌ You need the **Manage Server** permission to change Plural Starbot.';
+const SCOPE_EVERYWHERE = 'everywhere';
+const SCOPE_SERVER = 'server';
 
 export const autoproxyCommand = new SlashCommandBuilder()
   .setName('autoproxy')
@@ -37,15 +43,43 @@ export const autoproxyCommand = new SlashCommandBuilder()
       .addStringOption(o => o.setName('name').setDescription('Member name').setRequired(true).setMaxLength(100).setAutocomplete(true)),
   );
 
+const scopeOption = (o: SlashCommandStringOption): SlashCommandStringOption =>
+  o
+    .setName('scope')
+    .setDescription('Where it applies (default: everywhere)')
+    .addChoices({name: 'everywhere', value: SCOPE_EVERYWHERE}, {name: 'this server', value: SCOPE_SERVER});
+
+// Works in the bot's DM too (format and systag); edit answers there that it only works in a server.
 export const proxyCommand = new SlashCommandBuilder()
   .setName('proxy')
   .setDescription('Your proxied messages')
+  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+  .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM)
   .addSubcommand(s =>
     s
       .setName('edit')
       .setDescription('Edit your last proxied message in this channel, or one you name by ID')
       .addStringOption(o => o.setName('text').setDescription('The new text').setRequired(true).setMaxLength(MESSAGE_LIMIT))
       .addStringOption(o => o.setName('message_id').setDescription('ID of a proxied message of yours (default: your last one here)').setMaxLength(25)),
+  )
+  .addSubcommand(s =>
+    s
+      .setName('format')
+      .setDescription('Set how your proxied messages are named, or show your current format')
+      .addStringOption(o =>
+        o
+          .setName('template')
+          .setDescription('Formatting tags: {Emoji} {Name} {Pronouns} {Role} {Sys Tag}. Other text is kept. "default" resets')
+          .setMaxLength(FORMAT_MAX_LENGTH),
+      )
+      .addStringOption(scopeOption),
+  )
+  .addSubcommand(s =>
+    s
+      .setName('systag')
+      .setDescription('Set the Sys Tag that {Sys Tag} fills in your proxy format, or show it')
+      .addStringOption(o => o.setName('text').setDescription('Up to 20 characters. "clear" removes it'))
+      .addStringOption(scopeOption),
   );
 
 export const proxylogCommand = new SlashCommandBuilder()
@@ -152,14 +186,146 @@ export const autocompleteAutoproxy = async (i: AutocompleteInteraction): Promise
   await i.respond(choices);
 };
 
+// ---- /proxy format and /proxy systag ----------------------------------------
+
+const SERVER_SCOPE_IN_DM = 'The **this server** scope only works in a server. Leave it out to change the setting everywhere.';
+const SOURCE_TEXT: Record<SettingSource, string> = {server: 'set for this server', everywhere: 'set everywhere', default: 'the default'};
+
+/** A template or Sys Tag as inline code (as escaped bold text when it holds a backtick). */
+const shown = (s: string): string => (s.includes('`') ? `**${escapeMarkdown(s)}**` : `\`${s}\``);
+
+/** The name the caller's first proxyable member (private ones too: the reply is ephemeral) gets with these settings. */
+const previewLine = async (userId: string, names: NameSettings): Promise<string> => {
+  let session: VaultSession | null = null;
+  try {
+    session = await linkedSession(userId);
+  } catch (e) {
+    log.debug('No vault session for the proxy name preview of %s: %s', userId, errorText(e));
+  }
+  if (!session) return 'Link your vault with `/link` in a DM with me to see a preview.';
+  const first = session.members().find(isProxyable);
+  if (!first) return 'Your vault has no member to show a preview with.';
+  return `Preview: **${escapeMarkdown(proxyNameFor(first, names.format.value, names.sysTag.value))}**`;
+};
+
+/**
+ * The guild a value is saved for (null: everywhere), from the scope option. "this server" in a DM is
+ * refused when saving (returns undefined after replying) and ignored when only showing.
+ */
+const saveTarget = async (i: ChatInputCommandInteraction, saving: boolean): Promise<string | null | undefined> => {
+  if (i.options.getString('scope') !== SCOPE_SERVER) return null;
+  if (i.inGuild()) return i.guildId;
+  if (!saving) return null;
+  await i.reply({content: SERVER_SCOPE_IN_DM, flags: MessageFlags.Ephemeral});
+  return undefined;
+};
+
+const handleFormat = async (i: ChatInputCommandInteraction): Promise<void> => {
+  const raw = i.options.getString('template');
+  const target = await saveTarget(i, raw !== null);
+  if (target === undefined) return;
+  await i.deferReply({flags: MessageFlags.Ephemeral});
+  const say = async (lines: string[]): Promise<void> => {
+    await i.editReply({content: lines.join('\n'), allowedMentions: {parse: []}});
+  };
+  const here = i.inGuild() ? i.guildId : null;
+
+  if (raw === null) {
+    const names = getNameSettings(here, i.user.id);
+    await say([
+      `Your proxy name format ${here ? 'in this server' : 'everywhere'} is ${shown(names.format.value)} (${SOURCE_TEXT[names.format.source]}).`,
+      await previewLine(i.user.id, names),
+    ]);
+    return;
+  }
+
+  const input = parseFormatInput(raw);
+  if (input.kind === 'error') {
+    await say([`❌ ${input.message}`]);
+    return;
+  }
+  setNameFormat(target, i.user.id, input.kind === 'set' ? input.template : null);
+  const names = getNameSettings(target, i.user.id);
+  const lines: string[] = [];
+  if (input.kind === 'set') lines.push(`✅ Your proxy name format ${target ? 'in this server' : 'everywhere'} is now ${shown(input.template)}.`);
+  else if (target) lines.push(`✅ Removed your proxy name format for this server. Here you now get ${shown(names.format.value)} (${SOURCE_TEXT[names.format.source]}).`);
+  else lines.push(`✅ Your proxy name format everywhere is back to the default, ${shown(DEFAULT_FORMAT)}.`);
+  if (!target && here) {
+    const local = getNameSettings(here, i.user.id).format;
+    if (local.source === 'server') lines.push(`This server has its own format, ${shown(local.value)}, which still applies here.`);
+  }
+  lines.push(await previewLine(i.user.id, names));
+  await say(lines);
+};
+
+/** The note when a Sys Tag is set but the format that goes with it does not show it. */
+const unusedSysTagNote = (names: NameSettings): string[] =>
+  names.sysTag.value && !usesSysTag(names.format.value)
+    ? [`Your proxy name format ${shown(names.format.value)} has no {Sys Tag}, so the Sys Tag is not shown. Add it with \`/proxy format\`.`]
+    : [];
+
+const handleSysTag = async (i: ChatInputCommandInteraction): Promise<void> => {
+  const raw = i.options.getString('text');
+  const target = await saveTarget(i, raw !== null);
+  if (target === undefined) return;
+  await i.deferReply({flags: MessageFlags.Ephemeral});
+  const say = async (lines: string[]): Promise<void> => {
+    await i.editReply({content: lines.join('\n'), allowedMentions: {parse: []}});
+  };
+  const here = i.inGuild() ? i.guildId : null;
+
+  if (raw === null) {
+    const names = getNameSettings(here, i.user.id);
+    await say([
+      names.sysTag.source === 'default'
+        ? `You have no Sys Tag ${here ? 'in this server' : 'set'}.`
+        : `Your Sys Tag ${here ? 'in this server' : 'everywhere'} is ${shown(names.sysTag.value)} (${SOURCE_TEXT[names.sysTag.source]}).`,
+      ...unusedSysTagNote(names),
+      await previewLine(i.user.id, names),
+    ]);
+    return;
+  }
+
+  const input = parseSysTagInput(raw);
+  if (input.kind === 'error') {
+    await say([`❌ ${input.message}`]);
+    return;
+  }
+  setSysTag(target, i.user.id, input.kind === 'set' ? input.sysTag : null);
+  const names = getNameSettings(target, i.user.id);
+  const lines: string[] = [];
+  if (input.kind === 'set') lines.push(`✅ Your Sys Tag ${target ? 'in this server' : 'everywhere'} is now ${shown(input.sysTag)}.`);
+  else if (target) {
+    lines.push(
+      '✅ Removed your Sys Tag for this server.' +
+        (names.sysTag.source === 'everywhere' ? ` Here you now get ${shown(names.sysTag.value)} (set everywhere).` : ''),
+    );
+  } else lines.push('✅ Removed your Sys Tag everywhere.');
+  if (!target && here) {
+    const local = getNameSettings(here, i.user.id).sysTag;
+    if (local.source === 'server') lines.push(`This server has its own Sys Tag, ${shown(local.value)}, which still applies here.`);
+  }
+  lines.push(...unusedSysTagNote(names), await previewLine(i.user.id, names));
+  await say(lines);
+};
+
 // ---- /proxy edit ------------------------------------------------------------
 
 export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void> => {
+  const sub = i.options.getSubcommand();
+  if (sub === 'format') {
+    await handleFormat(i);
+    return;
+  }
+  if (sub === 'systag') {
+    await handleSysTag(i);
+    return;
+  }
   if (!i.inGuild()) {
     await i.reply({content: SERVER_ONLY, flags: MessageFlags.Ephemeral});
     return;
   }
-  if (i.options.getSubcommand() !== 'edit') return;
+  if (sub !== 'edit') return;
   const text = i.options.getString('text', true);
   const idRaw = i.options.getString('message_id')?.trim() || '';
   await i.deferReply({flags: MessageFlags.Ephemeral});

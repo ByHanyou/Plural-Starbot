@@ -73,6 +73,12 @@ const MIGRATIONS: string[] = [
    CREATE INDEX proxied_by_original ON proxied_messages(original_id);
    CREATE INDEX proxied_by_user ON proxied_messages(user_id, channel_id, created_at);
    CREATE INDEX proxied_by_time ON proxied_messages(created_at);`,
+  `CREATE TABLE user_settings (
+     user_id TEXT NOT NULL,
+     key     TEXT NOT NULL,
+     value   TEXT NOT NULL,
+     PRIMARY KEY (user_id, key)
+   );`,
 ];
 
 export class StarbotDb {
@@ -210,6 +216,41 @@ export class StarbotDb {
   clearGuild(guildId: string, module?: string): number {
     if (module) return this.db.prepare('DELETE FROM guild_settings WHERE guild_id = ? AND module = ?').run(guildId, module).changes;
     return this.db.prepare('DELETE FROM guild_settings WHERE guild_id = ?').run(guildId).changes;
+  }
+
+  /** Removes one key from every guild (e.g. a user's per-guild setting). Returns rows removed. */
+  deleteGuildSettingInAllGuilds(module: string, key: string): number {
+    return this.db.prepare('DELETE FROM guild_settings WHERE module = ? AND key = ?').run(module, key).changes;
+  }
+
+  // ---- per-user settings: JSON values by (user, key), for every guild ------
+
+  getUserSetting<T = unknown>(userId: string, key: string): T | undefined {
+    const row = this.db.prepare('SELECT value FROM user_settings WHERE user_id = ? AND key = ?').get(userId, key) as {value: string} | undefined;
+    if (!row) return undefined;
+    try {
+      return JSON.parse(row.value) as T;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Stores a JSON-serialisable value. undefined deletes the setting. */
+  setUserSetting(userId: string, key: string, value: unknown): void {
+    if (value === undefined) {
+      this.deleteUserSetting(userId, key);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?)
+         ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(userId, key, JSON.stringify(value));
+  }
+
+  deleteUserSetting(userId: string, key: string): boolean {
+    return this.db.prepare('DELETE FROM user_settings WHERE user_id = ? AND key = ?').run(userId, key).changes > 0;
   }
 
   // ---- proxied messages (7-day retention) ---------------------------------
