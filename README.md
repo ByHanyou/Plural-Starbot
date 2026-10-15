@@ -45,6 +45,8 @@ Type `/health` in any channel (requires Manage Server):
 | `/health show` | Current settings and the exact ping times |
 | `/health enable` / `/health disable` | Turn the schedule on or pause it |
 
+`/help` (anywhere, including DMs) shows this whole command list inside Discord.
+
 ### Linking your vault
 
 Send the bot a direct message and run `/link`; it asks for your Plural Star cloud password. The bot derives your vault key from it, registers itself as a device named "Plural Starbot" on your vault, and keeps only that key and the auth secret. The password itself is never stored. `/unlink` removes the device and deletes the key.
@@ -52,7 +54,7 @@ Send the bot a direct message and run `/link`; it asks for your Plural Star clou
 ### Proxying
 
 - A member's **Emoji** field in their Plural Star profile (up to three emoji) is their proxy tag: a message that starts or ends with it is deleted and re-posted as that member. If several members share the same emoji, the one currently fronting is used (first listed), otherwise the first of them in your member list.
-- `/autoproxy front` proxies every message as the first listed primary fronter; `/autoproxy member <name>` as a fixed member; `/autoproxy off` turns it off. A message with an explicit tag always wins.
+- `/autoproxy front` proxies every message as the first listed primary fronter; `/autoproxy member <name>` as a fixed member; `/autoproxy latch` as whichever member you last proxied as in that server (an emoji tag switches the latch; it expires after 6 hours without proxying); `/autoproxy off` turns it off. A message with an explicit tag always wins.
 - React ❌ to a proxied message of yours to delete it, ❓ to see who sent it (private reply). `/proxy edit` edits your last proxied message, or one you point at by message ID.
 - Attachments, replies and embeds are carried over.
 - **Display name.** By default a proxied message is posted under the member's name. `/proxy format <template>` changes that using formatting tags filled from the member's profile: `{Emoji}`, `{Name}`, `{Pronouns}`, `{Role}` and `{Sys Tag}`; anything else in the template is kept as typed, and empty values disappear cleanly (for example `{Emoji} {Name} ({Pronouns}) | {Sys Tag}`). `/proxy systag <text>` sets your Sys Tag (20 characters max); `/proxy systag clear` removes it. Both commands take a `scope`: **everywhere** (your default) or **this server** (an override for the server you run it in). Run either without a value to see what is in effect and a preview.
@@ -72,7 +74,7 @@ Members marked private in Plural Star are shown only to their own system and are
 
 ### Moderation log
 
-`/proxylog channel #channel` makes the bot copy every proxied message in the server to that channel as an embed with the member shown, the content, the sender's tag and ID, message IDs and a jump link. `/proxylog off` stops it. Requires Manage Server.
+`/proxylog channel #channel` makes the bot copy every proxied message in the server to that channel as an embed with the member shown, the content, the sender as a clickable mention, message IDs and a jump link. `/proxylog off` stops it. Requires Manage Server.
 
 ## Data
 

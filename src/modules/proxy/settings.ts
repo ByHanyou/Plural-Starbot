@@ -1,6 +1,6 @@
 // Proxy settings in db.ts's guild_settings table (module 'proxy'):
 //   logChannel          -> channel id for /proxylog
-//   autoproxy:<userId>  -> {mode: 'front'} | {mode: 'member', memberId}
+//   autoproxy:<userId>  -> {mode: 'front'} | {mode: 'member', memberId} | {mode: 'latch'}
 //   format:<userId>     -> the user's proxy name format in this guild (overrides their global one)
 //   systag:<userId>     -> the user's Sys Tag in this guild (overrides their global one)
 // and in its user_settings table (per user, every guild):

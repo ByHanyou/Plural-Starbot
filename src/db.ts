@@ -289,6 +289,14 @@ export class StarbotDb {
     return toProxied(row as ProxiedRow | undefined);
   }
 
+  /** The user's most recent proxied message in one guild, in any channel. */
+  lastProxiedInGuild(userId: string, guildId: string, now = Date.now()): ProxiedMessage | null {
+    const row = this.db
+      .prepare('SELECT * FROM proxied_messages WHERE user_id = ? AND guild_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1')
+      .get(userId, guildId, now - PROXIED_RETENTION_MS) as ProxiedRow | undefined;
+    return toProxied(row);
+  }
+
   deleteProxied(messageId: string): boolean {
     return this.db.prepare('DELETE FROM proxied_messages WHERE message_id = ?').run(messageId).changes > 0;
   }

@@ -1,6 +1,6 @@
 // /proxylog: every proxied message is copied to the guild's log channel in PluralKit's log shape.
 import {EmbedBuilder, Guild, Message, User} from 'discord.js';
-import {ellipsize, logFooter} from './text';
+import {ellipsize, logFooter, logSender} from './text';
 import {getLogChannel} from './settings';
 import {warnHourly} from './warn';
 
@@ -22,8 +22,6 @@ export const buildLogEmbed = (e: ProxyLogEntry): EmbedBuilder => {
     .setAuthor({name: ellipsize(`#${e.channelName}: ${e.shownName}`, 256), ...(e.avatarUrl ? {iconURL: e.avatarUrl} : {})})
     .setFooter({
       text: logFooter({
-        senderTag: e.sender.tag,
-        senderId: e.sender.id,
         messageId: e.sent.id,
         originalId: e.originalId,
       }),
@@ -31,6 +29,7 @@ export const buildLogEmbed = (e: ProxyLogEntry): EmbedBuilder => {
     .setTimestamp(e.sent.createdTimestamp || Date.now());
   if (e.avatarUrl) embed.setThumbnail(e.avatarUrl);
   if (e.content.trim()) embed.setDescription(ellipsize(e.content, 4096));
+  embed.addFields({name: 'Sender', value: logSender(e.sender.id)});
   const files = [...e.sent.attachments.values()];
   if (files.length) {
     const lines: string[] = [];

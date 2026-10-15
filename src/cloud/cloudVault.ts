@@ -119,6 +119,7 @@ export class CloudService {
   private sealed: Map<string, {hash: string; ct: Uint8Array}> = new Map();
   private sealedBytes = 0;
   private tooLarge: string[] = [];
+  private overQuota: string[] = [];
   private unbackedMedia: string[] = [];
   private lastCheckStartedAt = 0;
   private loaded = false;
@@ -407,12 +408,15 @@ export class CloudService {
       this.setPhase(phase, 0);
       try {
         this.tooLarge = [];
+        this.overQuota = [];
         this.unbackedMedia = [];
         await this.syncOnce();
         this.retryAttempt = 0;
         this.lastError = this.tooLarge.length
           ? `Left out, larger than ${Math.round(OBJECT_MAX_BYTES / (1024 * 1024))} MB: ${this.tooLarge.join(', ')}`
-          : null;
+          : this.overQuota.length
+            ? `Left out, over the vault's space: ${this.overQuota.join(', ')}`
+            : null;
       } catch (e) {
         this.recordError(e);
         this.scheduleRetry(e);
@@ -608,7 +612,17 @@ export class CloudService {
     }
     const id = objectIdOf(ct);
     this.keepSealed(key, hash, ct);
-    await api.putObject(vc, id, tier, ct);
+    try {
+      await api.putObject(vc, id, tier, ct);
+    } catch (e) {
+      // The vault's tier is at its cap for this object: leave the key out of this run,
+      // keep the rest syncing, and report it. The vault keeps its last good copy.
+      if (e instanceof CloudError && e.status === 413 && /quota/i.test(e.code)) {
+        if (!this.overQuota.includes(key)) this.overQuota.push(key);
+        return null;
+      }
+      throw e;
+    }
     this.dropSealed(key);
     remoteObjects.add(id);
     return {path: key, id, size: plain.length, kind, tier, hash: canonical, mime};

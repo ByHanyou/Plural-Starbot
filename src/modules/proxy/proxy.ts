@@ -221,13 +221,17 @@ export const handleMessage = async (message: Message): Promise<void> => {
     }
     if (!session) return;
 
+    const autoproxy = getAutoproxy(message.guildId, message.author.id);
     const plan = planProxy({
       content: message.content,
       hasAttachments: message.attachments.size > 0,
       members: session.members(),
       front: session.front(),
-      autoproxy: getAutoproxy(message.guildId, message.author.id),
+      autoproxy,
       settings: session.settings(),
+      // Latch follows the sender's last proxied message in this server, in any channel.
+      latch: autoproxy?.mode === 'latch' ? db().lastProxiedInGuild(message.author.id, message.guildId) : null,
+      now: Date.now(),
     });
     if (plan.kind !== 'proxy') return;
     await repost(message, session, plan.member, plan.content);

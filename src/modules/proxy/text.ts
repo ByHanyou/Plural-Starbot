@@ -92,18 +92,19 @@ export const replyQuote = (content: string, hasAttachments: boolean, jumpUrl: st
 };
 
 export interface LogFooterInput {
-  senderTag: string;
-  senderId: string;
   messageId: string;
   originalId: string;
 }
 
 /**
- * The PluralKit log footer without its system and member IDs: the sender's tag and ID and the message
- * IDs, which is what the README and the Privacy Policy say the log holds.
+ * The PluralKit log footer without its system and member IDs: the message IDs. The sender is a
+ * clickable mention in a Sender field instead, because Discord does not render mentions in footers.
  */
 export const logFooter = (o: LogFooterInput): string =>
-  ellipsize(`Sender: ${o.senderTag} (${o.senderId}) | Message ID: ${o.messageId} | Original Message ID: ${o.originalId}`, 2048);
+  ellipsize(`Message ID: ${o.messageId} | Original Message ID: ${o.originalId}`, 2048);
+
+/** The Sender field of a log entry: a clickable mention of the Discord user who sent the original message. */
+export const logSender = (senderId: string): string => `<@${senderId}>`;
 
 export type MentionKind = 'users' | 'roles' | 'everyone';
 

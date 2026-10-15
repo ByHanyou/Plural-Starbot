@@ -19,7 +19,7 @@ import {log} from '../../log';
 import {linkedSession, peekSession} from '../../vault/registry';
 import {LINK_BROKEN_TEXT, type VaultSession} from '../../vault/session';
 import {DEFAULT_FORMAT, FORMAT_MAX_LENGTH, parseFormatInput, parseSysTagInput, proxyNameFor, SettingSource, usesSysTag} from './format';
-import {displayNameOf, findMember, firstPrimaryFronter, isProxyable} from './match';
+import {displayNameOf, findMember, firstPrimaryFronter, isProxyable, LATCH_HOURS, latchMember} from './match';
 import {mentionsFor} from './proxy';
 import {getNameSettings, NameSettings, setAutoproxy, setLogChannel, setNameFormat, setSysTag} from './settings';
 import {ellipsize, MESSAGE_LIMIT} from './text';
@@ -41,7 +41,8 @@ export const autoproxyCommand = new SlashCommandBuilder()
       .setName('member')
       .setDescription('Proxy as one member')
       .addStringOption(o => o.setName('name').setDescription('Member name').setRequired(true).setMaxLength(100).setAutocomplete(true)),
-  );
+  )
+  .addSubcommand(s => s.setName('latch').setDescription(`Proxy as the member of your last proxied message in this server, for up to ${LATCH_HOURS} hours`));
 
 const scopeOption = (o: SlashCommandStringOption): SlashCommandStringOption =>
   o
@@ -113,6 +114,12 @@ const sessionOrSay = async (i: ChatInputCommandInteraction): Promise<VaultSessio
 
 // ---- /autoproxy -------------------------------------------------------------
 
+/** The latch state in a guild: the member latch autoproxy sends as right now, from the user's last proxied message there. */
+const latchStateLine = (guildId: string, userId: string, session: VaultSession): string => {
+  const member = latchMember(db().lastProxiedInGuild(userId, guildId), session.members());
+  return member ? `latch: currently **${escapeMarkdown(displayNameOf(member))}**` : `latch: none (nothing proxied in the last ${LATCH_HOURS} hours)`;
+};
+
 export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<void> => {
   if (!i.inGuild()) {
     await i.reply({content: SERVER_ONLY, flags: MessageFlags.Ephemeral});
@@ -135,6 +142,17 @@ export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<v
       content:
         'Autoproxy is set to **front** in this server: messages without a proxy tag are sent as the first listed primary fronter' +
         (now ? ` (right now **${escapeMarkdown(displayNameOf(now))}**).` : '. Nobody is fronting right now, so nothing is proxied until someone is.'),
+    });
+    return;
+  }
+
+  if (sub === 'latch') {
+    setAutoproxy(i.guildId, i.user.id, {mode: 'latch'});
+    await i.editReply({
+      content:
+        'Autoproxy is set to **latch** in this server: messages without a proxy tag are sent as the member of your last proxied message ' +
+        `in this server (any channel), until ${LATCH_HOURS} hours after it.\n` +
+        latchStateLine(i.guildId, i.user.id, session),
     });
     return;
   }

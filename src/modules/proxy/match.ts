@@ -9,7 +9,18 @@ export interface ProxyTag {
 
 const BACKSLASH = 0x5c;
 
-export type AutoproxySetting = {mode: 'front'} | {mode: 'member'; memberId: string};
+export type AutoproxySetting = {mode: 'front'} | {mode: 'member'; memberId: string} | {mode: 'latch'};
+
+/** How long a latch lasts: until this long after the user's last proxied message in the server. */
+export const LATCH_HOURS = 6;
+export const LATCH_TIMEOUT_MS = LATCH_HOURS * 60 * 60 * 1000;
+
+/** The user's last proxied message in the server (any channel), which latch autoproxy follows. */
+export interface LatchRecord {
+  /** Vault member id that message was proxied as. */
+  memberId: string;
+  timestamp: number;
+}
 
 export interface TagMatch {
   member: Member;
@@ -33,6 +44,10 @@ export interface PlanInput {
   autoproxy: AutoproxySetting | null;
   /** The sender's ps:settings (front sort order for autoproxy by front and for emoji tags several members share). */
   settings?: AppSettings | null;
+  /** For autoproxy latch: the sender's last proxied message in this server, any channel (null: none). */
+  latch?: LatchRecord | null;
+  /** The time the latch timeout is measured at (default: now). */
+  now?: number;
 }
 
 /** Members that can be proxied as: present, not deleted, not archived, not a custom front. Private members are allowed (own vault only). */
@@ -131,15 +146,28 @@ export const matchEmojiTags = (input: string, members: Member[], front: FrontSta
   return {member, tag: best.tag, inner: best.inner.trim(), content: (member.pkKeepProxy === true ? input : best.inner).trim()};
 };
 
-/** The member autoproxy sends as right now, or null. */
+/**
+ * The member latch autoproxy sends as: the member of the last proxied message, unless that message is
+ * more than LATCH_TIMEOUT_MS old or the member can no longer be proxied as (then null).
+ */
+export const latchMember = (last: LatchRecord | null | undefined, members: Member[], now: number = Date.now()): Member | null => {
+  if (!last || now - last.timestamp > LATCH_TIMEOUT_MS) return null;
+  const m = members.find(x => x && x.id === last.memberId);
+  return isProxyable(m) ? m : null;
+};
+
+/** The member autoproxy sends as right now, or null. `latch` and `now` are only used by the latch mode. */
 export const autoproxyMember = (
   setting: AutoproxySetting | null,
   members: Member[],
   front: FrontState | null,
   settings?: AppSettings | null,
+  latch?: LatchRecord | null,
+  now: number = Date.now(),
 ): Member | null => {
   if (!setting) return null;
   if (setting.mode === 'front') return firstPrimaryFronter(front, members, settings);
+  if (setting.mode === 'latch') return latchMember(latch, members, now);
   const m = members.find(x => x && x.id === setting.memberId);
   return isProxyable(m) ? m : null;
 };
@@ -157,7 +185,7 @@ export const planProxy = (i: PlanInput): ProxyPlan => {
     if (!emoji.inner && !i.hasAttachments) return {kind: 'none'};
     return {kind: 'proxy', via: 'tag', member: emoji.member, content: emoji.content};
   }
-  const auto = autoproxyMember(i.autoproxy, i.members, i.front, i.settings);
+  const auto = autoproxyMember(i.autoproxy, i.members, i.front, i.settings, i.latch, i.now);
   if (!auto) return {kind: 'none'};
   const content = i.content.trim();
   if (!content && !i.hasAttachments) return {kind: 'none'};
@@ -169,6 +197,7 @@ export const parseAutoproxy = (v: unknown): AutoproxySetting | null => {
   if (!v || typeof v !== 'object') return null;
   const o = v as {mode?: unknown; memberId?: unknown};
   if (o.mode === 'front') return {mode: 'front'};
+  if (o.mode === 'latch') return {mode: 'latch'};
   if (o.mode === 'member' && typeof o.memberId === 'string' && o.memberId) return {mode: 'member', memberId: o.memberId};
   return null;
 };
