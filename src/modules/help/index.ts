@@ -42,7 +42,7 @@ const PROFILES = [
   '`/member <name>` – Member card: pronouns, role, colour, emoji, groups, description, custom fields',
   '`/system` – System card: name, description, member count',
   '`/front show` – Who is fronting, by tier, with how long',
-  '`/front set <members> [tier]` – Set a tier\'s fronters (like Set Front in the app)',
+  '`/front set <members> [tier]` – Add members to a tier, keeping who is already there',
   '`/front add <member> [tier]` – Add a member to a tier',
   '`/front remove <member>` – Take a member out of the front',
   '`/front clear` – Clear the whole front',

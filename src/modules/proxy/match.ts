@@ -104,6 +104,33 @@ export const firstPrimaryFronter = (front: FrontState | null, members: Member[],
 /** A member's emoji proxy tag: the whole profile Emoji field, trimmed; '' when there is none. */
 export const emojiTagOf = (m: Member): string => (typeof m.emoji === 'string' ? m.emoji.trim() : '');
 
+// Keyboards, the app and Discord's emoji picker write the same emoji with or without presentation selectors
+// (U+FE0E/U+FE0F) and joiners (U+200D): Discord sends 👁‍🗨 for :eye_in_speech_bubble:, a profile may hold 👁️🗨️.
+// Tags are therefore compared without them.
+const EMOJI_GLUE = /[\uFE0E\uFE0F\u200D]/gu;
+/** An emoji tag as people see it: without presentation selectors or joiners. */
+export const emojiTagKey = (tag: string): string => tag.replace(EMOJI_GLUE, '');
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const GLUE = '[\uFE0E\uFE0F\u200D]*';
+/** Something that would continue the emoji a tag ends with: a selector, joiner, keycap or skin tone. */
+const CONTINUES = '[\uFE0E\uFE0F\u200D\u20E3\u{1F3FB}-\u{1F3FF}]';
+
+/**
+ * Where an emoji tag (by its key) sits at the start or the end of a message: selectors and joiners inside it
+ * are ignored, and it never matches only part of a longer emoji (one continued by a joiner, keycap or skin tone).
+ * Returns the text left once the tag is taken off, or null.
+ */
+const emojiTagInner = (input: string, key: string, at: 'start' | 'end'): string | null => {
+  const body = Array.from(key).map(escapeRe).join(GLUE);
+  if (at === 'start') {
+    const m = new RegExp(`^${body}[\uFE0E\uFE0F]*(?!${CONTINUES})`, 'u').exec(input);
+    return m ? input.slice(m[0].length) : null;
+  }
+  const m = new RegExp(`(?<!\u200D)${body}[\uFE0E\uFE0F]*$`, 'u').exec(input);
+  return m ? input.slice(0, m.index) : null;
+};
+
 export interface EmojiTagMatch extends TagMatch {
   /** The text without the tag and the whitespace next to it, trimmed; '' when the message is only the tag. */
   inner: string;
@@ -119,26 +146,28 @@ export const matchEmojiTags = (input: string, members: Member[], front: FrontSta
   const owners = new Map<string, Member[]>();
   for (const member of members) {
     if (!isProxyable(member)) continue;
-    const emoji = emojiTagOf(member);
-    if (!emoji) continue;
-    const list = owners.get(emoji);
+    const key = emojiTagKey(emojiTagOf(member));
+    if (!key) continue;
+    const list = owners.get(key);
     if (list) list.push(member);
-    else owners.set(emoji, [member]);
+    else owners.set(key, [member]);
   }
-  let best: {emoji: string; tag: ProxyTag; inner: string} | null = null;
-  for (const emoji of owners.keys()) {
+  let best: {key: string; size: number; tag: ProxyTag; inner: string} | null = null;
+  for (const key of owners.keys()) {
+    const size = Array.from(key).length;
     // The start is tried first, so a tag at both ends is taken from the start.
-    for (const tag of [{prefix: emoji, suffix: ''}, {prefix: '', suffix: emoji}]) {
-      const inner = innerText(input, tag);
+    for (const at of ['start', 'end'] as const) {
+      const inner = emojiTagInner(input, key, at);
       if (inner === null) continue;
-      const longer = !best || emoji.length > best.emoji.length;
-      const startBeatsEnd = !!best && emoji.length === best.emoji.length && tag.prefix !== '' && best.tag.prefix === '';
-      if (longer || startBeatsEnd) best = {emoji, tag, inner};
+      const tag: ProxyTag = at === 'start' ? {prefix: key, suffix: ''} : {prefix: '', suffix: key};
+      const longer = !best || size > best.size;
+      const startBeatsEnd = !!best && size === best.size && at === 'start' && best.tag.prefix === '';
+      if (longer || startBeatsEnd) best = {key, size, tag, inner};
       break;
     }
   }
   if (!best) return null;
-  const sharing = owners.get(best.emoji) ?? [];
+  const sharing = owners.get(best.key) ?? [];
   const ids = new Set(sharing.map(m => m.id));
   const fronting = sharing.length > 1 ? primaryFronters(front, members, settings).find(m => ids.has(m.id)) : undefined;
   const member = (fronting && sharing.find(m => m.id === fronting.id)) || sharing[0];

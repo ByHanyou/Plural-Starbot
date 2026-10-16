@@ -2,6 +2,7 @@ import {CloudApi, VaultCreds} from './cloudApi';
 import {
   CloudError,
   CloudLinkState,
+  cloudErrorCode,
   CloudPhase,
   CloudStatus,
   CloudTransport,
@@ -108,6 +109,7 @@ export class CloudService {
   private phase: CloudPhase = 'idle';
   private progress = 0;
   private lastError: string | null = null;
+  private lastErrorCode: string | null = null;
   private deviceCount = 0;
   private pendingKeys = 0;
   private listeners: Set<Listener> = new Set();
@@ -141,6 +143,7 @@ export class CloudService {
       phase: this.phase,
       progress: this.progress,
       lastError: this.lastError,
+      lastErrorCode: this.lastErrorCode,
       mediaTier: !!this.link?.mediaTier,
       deviceCount: this.deviceCount,
       lastSyncAt: this.link?.lastCheckAt || 0,
@@ -208,6 +211,7 @@ export class CloudService {
   async linkWithPassword(password: string, mediaTier: boolean): Promise<LinkOutcome> {
     if (this.link) throw new CloudError(0, 'already linked');
     this.lastError = null;
+    this.lastErrorCode = null;
     this.setPhase('deriving', 0);
     try {
       const creds = await deriveVaultCredentials(password, f => this.setPhase('deriving', f));
@@ -254,6 +258,7 @@ export class CloudService {
     if (!creds) throw new CloudError(0, 'no pending credentials');
     this.pendingCreds = null;
     this.lastError = null;
+    this.lastErrorCode = null;
     this.setPhase('importing', 0);
     try {
       const api = this.api();
@@ -389,6 +394,7 @@ export class CloudService {
 
   private recordError(e: unknown): void {
     this.lastError = e instanceof Error ? e.message : String(e);
+    this.lastErrorCode = cloudErrorCode(e);
     this.emit();
   }
 
@@ -417,6 +423,7 @@ export class CloudService {
           : this.overQuota.length
             ? `Left out, over the vault's space: ${this.overQuota.join(', ')}`
             : null;
+        this.lastErrorCode = null;
       } catch (e) {
         this.recordError(e);
         this.scheduleRetry(e);

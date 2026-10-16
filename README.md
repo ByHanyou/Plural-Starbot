@@ -68,7 +68,7 @@ All of these work on your own vault with nothing extra typed: the bot knows whic
 | `/system` (optionally `@user`) | System card: name, description, member count, linked account, avatar and banner |
 | `/member <name>` (optionally `@user`) | Member card: display name, pronouns, role, colour, emoji, groups, description, avatar and banner |
 | `/front show` (optionally `@user`) | Who is fronting, by tier, with how long |
-| `/front set`, `/front add`, `/front remove`, `/front clear` | Change the front. `set` and `add` take `member` and `tier` (primary, cofront or coconscious; default primary); `remove` takes a member; `clear` empties every tier. Behaves exactly like Set Front in the app: history entry, start times, tiers |
+| `/front set`, `/front add`, `/front remove`, `/front clear` | Change the front. `set` adds one or more members (comma-separated) to a tier and keeps who is already there; `add` takes one member; both take `tier` (primary, cofront or coconscious; default primary) and move the members out of other tiers; `remove` takes a member; `clear` empties every tier. Behaves exactly like Set Front in the app: history entry, start times, tiers |
 
 Members marked private in Plural Star are shown only to their own system and are never named in front displays to others.
 

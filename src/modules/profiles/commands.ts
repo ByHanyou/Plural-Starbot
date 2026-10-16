@@ -46,7 +46,7 @@ export const frontCommand = new SlashCommandBuilder()
   .addSubcommand(s =>
     s
       .setName('set')
-      .setDescription('Set who fronts in a tier, like Set Front in the app')
+      .setDescription('Add members to a tier, keeping who is already there (like Set Front in the app)')
       .addStringOption(o => o.setName('member').setDescription('Member name, or several separated by commas').setRequired(true).setMaxLength(1000))
       .addStringOption(o => o.setName('tier').setDescription('Tier (default: primary)').addChoices(...TIER_CHOICES)),
   )

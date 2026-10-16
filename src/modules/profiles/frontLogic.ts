@@ -199,8 +199,9 @@ export const serializeMoodList = (moods: string[]): string =>
 const resolveMood = (mood: string): string | undefined => serializeMoodList(parseMoodList(mood)) || undefined;
 
 /**
- * Set Front (SetFrontModal): tiers seeded from the current front (each member in one tier only),
- * the chosen tier replaced by `ids` (which leave the other tiers), saved the way handleSave does.
+ * Set Front (SetFrontModal): tiers seeded from the current front (each member in one tier only), like the
+ * app's checkboxes start ticked; `ids` are ticked in the chosen tier (leaving the other tiers) and everyone
+ * already in it stays, so their fronting times carry on. Saved the way handleSave does.
  * GPS seeding of the primary location is not part of the bot.
  */
 export const setFrontTiers = (current: FrontState | null, tier: FrontTierKey, ids: string[]): FrontTiers => {
@@ -219,7 +220,7 @@ export const setFrontTiers = (current: FrontState | null, tier: FrontTierKey, id
     });
     if (changed) sets[key] = cleaned;
   }
-  sets[tier] = chosen;
+  sets[tier] = new Set([...sets[tier], ...chosen]);
   const build = (key: FrontTierKey): FrontTier => ({
     memberIds: [...sets[key]],
     mood: resolveMood(c?.[key]?.mood || ''),
