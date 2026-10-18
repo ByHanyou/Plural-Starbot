@@ -1,8 +1,3 @@
-// No-repeat randomness, ported from bot.py's ContentMemory and RecencyDeck.
-// The rule: a nudge or fact may not be re-used within two days. When each line
-// last went out is remembered per guild in SQLite (module "health", key
-// "content_memory"), so the spacing survives restarts.
-
 import {createHash} from 'node:crypto';
 import {db} from '../../db';
 import {log} from '../../log';
@@ -12,15 +7,12 @@ import {MODULE} from './settings';
 export const REUSE_COOLDOWN_SECONDS = 2 * 24 * 60 * 60;
 const MEMORY_KEY = 'content_memory';
 
-/** deck key ("food|nudge") -> line key -> unix seconds the line last went out. */
 export type MemoryData = Record<string, Record<string, number>>;
 
-/** Lines are tracked by a short hash, so the store stays small and an edited line simply counts as brand new. */
 export const lineKey = (text: string): string => createHash('sha1').update(text, 'utf8').digest('hex').slice(0, 12);
 
 const isDict = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** When did each line last go out. `persist` writes the whole record. */
 export class ContentMemory {
   private data: MemoryData = {};
 
@@ -42,7 +34,6 @@ export class ContentMemory {
     this.data[deckKey][lineKey(text)] = Math.trunc(when);
   }
 
-  /** Drop records for lines that no longer exist in content.ts. */
   prune(deckKey: string, texts: readonly string[]): void {
     const keep = new Set(texts.map(lineKey));
     const bucket = Object.hasOwn(this.data, deckKey) ? this.data[deckKey] : undefined;
@@ -51,7 +42,6 @@ export class ContentMemory {
     }
   }
 
-  /** A copy of what would be persisted. */
   snapshot(): MemoryData {
     return structuredClone(this.data);
   }
@@ -65,13 +55,6 @@ export class ContentMemory {
   }
 }
 
-/**
- * Picks a line that hasn't gone out in the last two days, preferring the ones
- * idle longest so the whole pool keeps cycling. If a schedule fires so often
- * that every line has been used inside the window (hourly pings will outrun a
- * 40-line pool), the least-recently-used line goes out: the closest anything
- * can get to the rule, and still never a back-to-back.
- */
 export class RecencyDeck {
   private readonly items: string[];
 
@@ -84,15 +67,11 @@ export class RecencyDeck {
     memory.prune(key, this.items);
   }
 
-  /** `now` is unix seconds; `random` returns [0, 1). Both are injectable for tests. */
   draw(now: number = Date.now() / 1000, random: () => number = Math.random): string {
     const used = (s: string): number => this.memory.lastUsed(this.key, s);
     const eligible = this.items.filter(s => now - used(s) >= REUSE_COOLDOWN_SECONDS);
     let pick: string;
     if (eligible.length) {
-      // Shuffle first so ties (fresh installs: everything at 0) don't fall
-      // back to list order, then lean on the least recently used half to keep
-      // rotation pressure without going deterministic.
       for (let i = eligible.length - 1; i > 0; i--) {
         const j = Math.floor(random() * (i + 1));
         [eligible[i], eligible[j]] = [eligible[j], eligible[i]];
@@ -109,7 +88,6 @@ export class RecencyDeck {
   }
 }
 
-/** One deck per topic, shared by every group of the guild that uses the topic. */
 export interface GuildContent {
   memory: ContentMemory;
   nudgeDecks: Record<string, RecencyDeck>;
@@ -126,7 +104,6 @@ export const buildDecks = (memory: ContentMemory): GuildContent => {
 
 const guildContent = new Map<string, GuildContent>();
 
-/** The guild's decks, loading its content memory from the database on first use. */
 export const contentFor = (guildId: string): GuildContent => {
   let c = guildContent.get(guildId);
   if (!c) {

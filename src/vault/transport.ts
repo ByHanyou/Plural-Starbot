@@ -3,7 +3,6 @@ import {lookupWindow} from './throttle';
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
-/** Thrown instead of sending a vault-create request: the bot only ever links to existing vaults. */
 export class VaultCreateRefused extends Error {
   constructor() {
     super('Plural Starbot never creates vaults.');
@@ -24,11 +23,6 @@ const isCreateRequest = (req: CloudRequest): boolean => isPost(req, '/cloud/vaul
 
 const isLookupRequest = (req: CloudRequest): boolean => isPost(req, '/cloud/vault/lookup');
 
-/**
- * CloudTransport over Node's fetch. Request and response bodies travel as base64 (the raw bytes);
- * response header names are lowercased; the timeout covers the whole exchange including the body.
- * Vault lookups wait for a slot in the shared lookup window (throttle.ts) before they are sent.
- */
 export const fetchTransport: CloudTransport = {
   async request(req: CloudRequest): Promise<CloudResponse> {
     if (isCreateRequest(req)) throw new VaultCreateRefused();

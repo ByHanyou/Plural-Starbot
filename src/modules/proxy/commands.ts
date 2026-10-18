@@ -1,4 +1,3 @@
-// /autoproxy, /proxy (edit, format, systag) and /proxylog.
 import {
   ApplicationIntegrationType,
   AutocompleteInteraction,
@@ -18,10 +17,21 @@ import {db} from '../../db';
 import {log} from '../../log';
 import {linkedSession, peekSession} from '../../vault/registry';
 import {LINK_BROKEN_TEXT, type VaultSession} from '../../vault/session';
+import type {Member} from '../../vault/types';
 import {DEFAULT_FORMAT, FORMAT_MAX_LENGTH, parseFormatInput, parseSysTagInput, proxyNameFor, SettingSource, usesSysTag} from './format';
-import {displayNameOf, findMember, firstPrimaryFronter, isProxyable, LATCH_HOURS, latchMember} from './match';
+import {
+  displayNameOf,
+  emojiTagKey,
+  emojiTagOf,
+  findMember,
+  findMemberByEmoji,
+  firstPrimaryFronter,
+  isProxyable,
+  LATCH_HOURS,
+  latchMember,
+} from './match';
 import {mentionsFor} from './proxy';
-import {getNameSettings, NameSettings, setAutoproxy, setLogChannel, setNameFormat, setSysTag} from './settings';
+import {getNameSettings, NameSettings, setAutoproxy, setLogChannel, setMemberFormat, setNameFormat, setSysTag} from './settings';
 import {ellipsize, MESSAGE_LIMIT} from './text';
 import {forgetWebhook, isApiError, targetOf, webhookFor} from './webhooks';
 
@@ -50,7 +60,6 @@ const scopeOption = (o: SlashCommandStringOption): SlashCommandStringOption =>
     .setDescription('Where it applies (default: everywhere)')
     .addChoices({name: 'everywhere', value: SCOPE_EVERYWHERE}, {name: 'this server', value: SCOPE_SERVER});
 
-// Works in the bot's DM too (format and systag); edit answers there that it only works in a server.
 export const proxyCommand = new SlashCommandBuilder()
   .setName('proxy')
   .setDescription('Your proxied messages')
@@ -66,7 +75,14 @@ export const proxyCommand = new SlashCommandBuilder()
   .addSubcommand(s =>
     s
       .setName('format')
-      .setDescription('Set how your proxied messages are named, or show your current format')
+      .setDescription('Set how your proxied messages are named, for all members or one, or show the current format')
+      .addStringOption(o =>
+        o
+          .setName('member')
+          .setDescription('One member (emoji or name) to set or show their own format, used instead of yours')
+          .setMaxLength(100)
+          .setAutocomplete(true),
+      )
       .addStringOption(o =>
         o
           .setName('template')
@@ -99,7 +115,6 @@ export const proxylogCommand = new SlashCommandBuilder()
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** The user's linked session, or null after telling them (reply must already be deferred). */
 const sessionOrSay = async (i: ChatInputCommandInteraction): Promise<VaultSession | null> => {
   try {
     const session = await linkedSession(i.user.id);
@@ -112,9 +127,6 @@ const sessionOrSay = async (i: ChatInputCommandInteraction): Promise<VaultSessio
   return null;
 };
 
-// ---- /autoproxy -------------------------------------------------------------
-
-/** The latch state in a guild: the member latch autoproxy sends as right now, from the user's last proxied message there. */
 const latchStateLine = (guildId: string, userId: string, session: VaultSession): string => {
   const member = latchMember(db().lastProxiedInGuild(userId, guildId), session.members());
   return member ? `latch: currently **${escapeMarkdown(displayNameOf(member))}**` : `latch: none (nothing proxied in the last ${LATCH_HOURS} hours)`;
@@ -179,14 +191,12 @@ export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<v
   await i.editReply({content: `Autoproxy is set to **${escapeMarkdown(displayNameOf(found.member))}** in this server.`});
 };
 
-/** Suggestions for /autoproxy member: the user's own proxyable members (private ones included, only they see this). */
 export const autocompleteAutoproxy = async (i: AutocompleteInteraction): Promise<void> => {
   const focused = i.options.getFocused(true);
   if (focused.name !== 'name') {
     await i.respond([]);
     return;
   }
-  // Autocomplete must answer within 3 s: use only a session already in memory (all linked ones load at startup).
   const session = peekSession(i.user.id);
   if (!session?.isLinked()) {
     await i.respond([]);
@@ -204,15 +214,49 @@ export const autocompleteAutoproxy = async (i: AutocompleteInteraction): Promise
   await i.respond(choices);
 };
 
-// ---- /proxy format and /proxy systag ----------------------------------------
+export const autocompleteProxy = async (i: AutocompleteInteraction): Promise<void> => {
+  const focused = i.options.getFocused(true);
+  if (focused.name !== 'member') {
+    await i.respond([]);
+    return;
+  }
+  const session = peekSession(i.user.id);
+  if (!session?.isLinked()) {
+    await i.respond([]);
+    return;
+  }
+  const typed = String(focused.value).trim();
+  const q = typed.toLowerCase();
+  const key = emojiTagKey(typed);
+  const choices = session
+    .members()
+    .filter(isProxyable)
+    .filter(m => m.id.length <= 100)
+    .map(m => ({m, label: displayNameOf(m) || m.id, nick: String(m.nickname ?? '').trim().toLowerCase(), emoji: emojiTagKey(emojiTagOf(m))}))
+    .filter(c => !q || c.label.toLowerCase().includes(q) || c.nick.includes(q) || (!!key && c.emoji.includes(key)))
+    .slice(0, 25)
+    .map(c => ({name: ellipsize(c.label, 100), value: c.m.id}));
+  await i.respond(choices);
+};
 
 const SERVER_SCOPE_IN_DM = 'The **this server** scope only works in a server. Leave it out to change the setting everywhere.';
-const SOURCE_TEXT: Record<SettingSource, string> = {server: 'set for this server', everywhere: 'set everywhere', default: 'the default'};
+const SOURCE_TEXT: Record<SettingSource, string> = {
+  memberServer: 'their own format, set for this server',
+  memberEverywhere: 'their own format, set everywhere',
+  server: 'set for this server',
+  everywhere: 'set everywhere',
+  default: 'the default',
+};
+const MEMBER_SOURCE_TEXT: Record<SettingSource, string> = {
+  memberServer: 'their own format, set for this server',
+  memberEverywhere: 'their own format, set everywhere',
+  server: 'your format for all members, set for this server',
+  everywhere: 'your format for all members, set everywhere',
+  default: 'the default',
+};
 
-/** A template or Sys Tag as inline code (as escaped bold text when it holds a backtick). */
 const shown = (s: string): string => (s.includes('`') ? `**${escapeMarkdown(s)}**` : `\`${s}\``);
 
-/** The name the caller's first proxyable member (private ones too: the reply is ephemeral) gets with these settings. */
 const previewLine = async (userId: string, names: NameSettings): Promise<string> => {
   let session: VaultSession | null = null;
   try {
@@ -226,16 +270,89 @@ const previewLine = async (userId: string, names: NameSettings): Promise<string>
   return `Preview: **${escapeMarkdown(proxyNameFor(first, names.format.value, names.sysTag.value))}**`;
 };
 
-/**
- * The guild a value is saved for (null: everywhere), from the scope option. "this server" in a DM is
- * refused when saving (returns undefined after replying) and ignored when only showing.
- */
 const saveTarget = async (i: ChatInputCommandInteraction, saving: boolean): Promise<string | null | undefined> => {
   if (i.options.getString('scope') !== SCOPE_SERVER) return null;
   if (i.inGuild()) return i.guildId;
   if (!saving) return null;
   await i.reply({content: SERVER_SCOPE_IN_DM, flags: MessageFlags.Ephemeral});
   return undefined;
+};
+
+type Say = (lines: string[]) => Promise<void>;
+
+const memberPreviewLine = (member: Member, names: NameSettings): string =>
+  `Preview: **${escapeMarkdown(proxyNameFor(member, names.format.value, names.sysTag.value))}**`;
+
+const formatMemberOrSay = async (i: ChatInputCommandInteraction, query: string, say: Say): Promise<Member | null> => {
+  const session = await sessionOrSay(i);
+  if (!session) return null;
+  try {
+    await session.freshen();
+  } catch (e) {
+    const broken = e instanceof CloudError && e.code === 'link broken';
+    if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', i.user.id);
+    await say([broken ? `❌ ${LINK_BROKEN_TEXT}` : `❌ Could not read your vault: ${errorText(e)}`]);
+    return null;
+  }
+  const typed = `**${escapeMarkdown(query.trim())}**`;
+  const byName = findMember(session.members(), query);
+  if (byName.kind === 'found') return byName.member;
+  if (byName.kind === 'ambiguous') {
+    await say([`${byName.count} members are called ${typed}. Pick one from the list that appears while you type.`]);
+    return null;
+  }
+  const byEmoji = findMemberByEmoji(session.members(), query);
+  if (byEmoji.kind === 'found') return byEmoji.member;
+  if (byEmoji.kind === 'ambiguous') {
+    await say([`${byEmoji.count} members have ${typed} as their emoji. Give the member's name instead.`]);
+    return null;
+  }
+  await say([`No member in your vault is called ${typed} or has it as their emoji.`]);
+  return null;
+};
+
+const handleMemberFormat = async (
+  i: ChatInputCommandInteraction,
+  query: string,
+  raw: string | null,
+  target: string | null,
+  here: string | null,
+  say: Say,
+): Promise<void> => {
+  const member = await formatMemberOrSay(i, query, say);
+  if (!member) return;
+  const name = `**${escapeMarkdown(displayNameOf(member))}**`;
+
+  if (raw === null) {
+    const names = getNameSettings(here, i.user.id, member.id);
+    await say([
+      `The proxy name format for ${name} ${here ? 'in this server' : 'everywhere'} is ${shown(names.format.value)} (${MEMBER_SOURCE_TEXT[names.format.source]}).`,
+      memberPreviewLine(member, names),
+    ]);
+    return;
+  }
+
+  const input = parseFormatInput(raw);
+  if (input.kind === 'error') {
+    await say([`❌ ${input.message}`]);
+    return;
+  }
+  setMemberFormat(target, i.user.id, member.id, input.kind === 'set' ? input.template : null);
+  const names = getNameSettings(target, i.user.id, member.id);
+  const lines: string[] = [];
+  if (input.kind === 'set') lines.push(`✅ The proxy name format for ${name} ${target ? 'in this server' : 'everywhere'} is now ${shown(input.template)}.`);
+  else {
+    lines.push(
+      `✅ ${name} no longer has their own proxy name format ${target ? 'for this server' : 'everywhere'}. ` +
+        `${target ? 'Here they' : 'They'} now get ${shown(names.format.value)} (${MEMBER_SOURCE_TEXT[names.format.source]}).`,
+    );
+  }
+  if (!target && here) {
+    const local = getNameSettings(here, i.user.id, member.id).format;
+    if (local.source !== names.format.source) lines.push(`In this server ${name} gets ${shown(local.value)} (${MEMBER_SOURCE_TEXT[local.source]}).`);
+  }
+  lines.push(memberPreviewLine(member, names));
+  await say(lines);
 };
 
 const handleFormat = async (i: ChatInputCommandInteraction): Promise<void> => {
@@ -247,6 +364,12 @@ const handleFormat = async (i: ChatInputCommandInteraction): Promise<void> => {
     await i.editReply({content: lines.join('\n'), allowedMentions: {parse: []}});
   };
   const here = i.inGuild() ? i.guildId : null;
+
+  const memberQuery = i.options.getString('member');
+  if (memberQuery !== null) {
+    await handleMemberFormat(i, memberQuery, raw, target, here, say);
+    return;
+  }
 
   if (raw === null) {
     const names = getNameSettings(here, i.user.id);
@@ -276,7 +399,6 @@ const handleFormat = async (i: ChatInputCommandInteraction): Promise<void> => {
   await say(lines);
 };
 
-/** The note when a Sys Tag is set but the format that goes with it does not show it. */
 const unusedSysTagNote = (names: NameSettings): string[] =>
   names.sysTag.value && !usesSysTag(names.format.value)
     ? [`Your proxy name format ${shown(names.format.value)} has no {Sys Tag}, so the Sys Tag is not shown. Add it with \`/proxy format\`.`]
@@ -326,8 +448,6 @@ const handleSysTag = async (i: ChatInputCommandInteraction): Promise<void> => {
   lines.push(...unusedSysTagNote(names), await previewLine(i.user.id, names));
   await say(lines);
 };
-
-// ---- /proxy edit ------------------------------------------------------------
 
 export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void> => {
   const sub = i.options.getSubcommand();
@@ -413,8 +533,6 @@ export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void>
   const link = `https://discord.com/channels/${guildChannel.guildId}/${record.channelId}/${record.messageId}`;
   await i.editReply({content: `✅ Edited ${link}.`});
 };
-
-// ---- /proxylog ----------------------------------------------------------------
 
 export const handleProxylog = async (i: ChatInputCommandInteraction): Promise<void> => {
   if (!i.inCachedGuild()) {

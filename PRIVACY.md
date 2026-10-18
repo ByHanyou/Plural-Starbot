@@ -1,6 +1,6 @@
 # Plural Starbot Privacy Policy
 
-Last updated: 2026-10-14
+Last updated: 2026-10-16
 
 Plural Starbot ("the bot") is operated by The Hanyou System ("we", "us"). Contact: The1Hanyou@gmail.com.
 
@@ -12,8 +12,10 @@ The bot keeps as little as it can. On its own server it stores:
 
 | Data | Why | Kept until |
 |---|---|---|
-| Your Discord user ID together with the vault link record: the key and authentication secret derived from your Plural Star cloud password, the vault's lookup ID, the manifest version, link and last-check timestamps, and the list of vault entries the bot holds with their content hashes | To open your vault, act as one of its devices, and know what has changed since its last check | You run `/unlink` |
-| Per-server settings chosen by moderators: reminder channel, roles, schedule and timezone, plus the reminder bot's two-day memory of which nudges and facts it has posted; proxy log channel; per user: autoproxy settings, proxy display-name format and Sys Tag (a global default and any per-server override) | To run reminders, proxying and logging the way the server configured them | The setting is changed or the bot leaves the server |
+| Your Discord user ID together with the vault link record: the key and authentication secret derived from your Plural Star cloud password, the vault's lookup ID, the manifest version, link and last-check timestamps, the list of vault entries the bot holds with their content hashes, a count of the vault's entries, and a temporary list of the object IDs the bot has uploaded but not yet added to the vault's index | To open your vault, act as one of its devices, and know what has changed since its last check | You run `/unlink` |
+| Per-server settings chosen by moderators: reminder channel, roles, schedule and timezone, plus the reminder bot's two-day memory of which nudges and facts it has posted; proxy log channel; per user: autoproxy settings | To run reminders, proxying and logging the way the server configured them | The setting is changed or the bot leaves the server |
+| Per user: your proxy display-name format and Sys Tag (a global default and any per-server override) | To name and tag your proxied messages the way you set | You reset them or run `/unlink`; a per-server one also goes when the bot leaves that server |
+| Per user: the proxy display-name formats you set for single members, as each member's vault ID with its format (a global one and any per-server override) | To name the proxied messages of those members the way you set | You reset that member's format or run `/unlink`; a per-server one also goes when the bot leaves that server |
 | For each proxied message: the new message ID, the original message ID, the server, the channel, the member, your user ID and the time | So that you can edit or delete a proxied message and so moderators can see who sent it | 7 days, then deleted automatically |
 | Operational logs on the bot's server, which can include Discord user IDs, server names and error details, never message content or vault contents | To diagnose problems | Rotated with the server's logs |
 
@@ -40,7 +42,7 @@ We do not sell data, share it with advertisers, or use it for anything other tha
 
 ## 5. Removing your data
 
-- `/unlink` removes the bot from your vault's devices and deletes the stored key and secret for your Discord account.
+- `/unlink` removes the bot from your vault's devices and deletes the stored key and secret for your Discord account, your proxy display-name format, your Sys Tag, and the proxy display-name formats you set for single members, both the global ones and the per-server ones.
 - Proxied-message records expire after 7 days on their own; deleting a proxied message removes its record immediately.
 - Server settings are removed when a moderator clears them or removes the bot.
 - For anything else, email The1Hanyou@gmail.com from an account that can prove it owns the Discord user in question.

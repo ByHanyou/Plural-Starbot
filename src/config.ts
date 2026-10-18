@@ -24,7 +24,6 @@ const unquote = (v: string): string => {
   return t;
 };
 
-/** Reads KEY=VALUE lines from a .env file into process.env without overriding values already set. */
 export const loadEnvFile = (path: string): boolean => {
   if (!existsSync(path)) return false;
   const text = readFileSync(path, 'utf8');
@@ -62,10 +61,6 @@ const httpUrl = (name: string, raw: string | undefined, problems: string[]): str
   return v.replace(/\/+$/, '');
 };
 
-/**
- * Loads `.env` from the working directory (values already in the environment win)
- * and validates the five settings. Throws ConfigError listing every problem.
- */
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env, envFile = resolve(process.cwd(), '.env')): Config => {
   if (env === process.env) loadEnvFile(envFile);
   const problems: string[] = [];
@@ -101,7 +96,6 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env, envFile = resol
 
 let current: Config | null = null;
 
-/** The loaded configuration. loadConfig()/setConfig() must have run first. */
 export const config = (): Config => {
   if (!current) throw new ConfigError('Configuration has not been loaded.');
   return current;

@@ -1,4 +1,3 @@
-// Reactions on proxied messages: ❌ by the sender deletes it, ❓ by anyone DMs the reactor who sent it.
 import {escapeMarkdown, MessageReaction, PartialMessageReaction, RESTJSONErrorCodes, User, userMention} from 'discord.js';
 import {db} from '../../db';
 import {log} from '../../log';
@@ -13,7 +12,6 @@ const jumpUrl = (guildId: string | null, channelId: string, messageId: string): 
 
 const emojiOf = (reaction: MessageReaction | PartialMessageReaction): string => (reaction.emoji.name ?? '').split(VARIATION_SELECTOR_16).join('');
 
-/** Before anything is fetched: only ❌ and ❓ on a message the bot proxied in the last 7 days matter. */
 export const wantsReaction = (reaction: MessageReaction | PartialMessageReaction): boolean => {
   const emoji = emojiOf(reaction);
   return (emoji === DELETE || emoji === WHO) && !!db().proxiedByMessageId(reaction.message.id);

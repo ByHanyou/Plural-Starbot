@@ -22,7 +22,6 @@ const opts = (): RegistryOptions => {
   return options;
 };
 
-/** The session for a Discord user (created and initialised on first use; linked or not). */
 export const getSession = (userId: string): Promise<VaultSession> => {
   const have = sessions.get(userId);
   if (have) return have.init().then(() => have);
@@ -35,7 +34,6 @@ export const getSession = (userId: string): Promise<VaultSession> => {
     .init()
     .then(() => s)
     .catch(e => {
-      // Let the next call try again with a fresh session.
       if (sessions.get(userId) === s) sessions.delete(userId);
       s.stop();
       throw e;
@@ -45,7 +43,6 @@ export const getSession = (userId: string): Promise<VaultSession> => {
   return p;
 };
 
-/** The user's session when a vault is linked, else null. Never creates a session for unlinked users. */
 export const linkedSession = async (userId: string): Promise<VaultSession | null> => {
   const have = sessions.get(userId);
   if (have) {
@@ -57,16 +54,12 @@ export const linkedSession = async (userId: string): Promise<VaultSession | null
   return s.isLinked() ? s : null;
 };
 
-/** The session if it is already in memory (no loading). */
 export const peekSession = (userId: string): VaultSession | undefined => sessions.get(userId);
 
-/** Whether SQLite holds a vault link for the user. */
 export const hasStoredLink = (userId: string): boolean => opts().links.has(userId);
 
-/** Every session in memory. */
 export const allSessions = (): VaultSession[] => [...sessions.values()];
 
-/** Stops and forgets a session (after unlink). */
 export const dropSession = (userId: string): void => {
   const s = sessions.get(userId);
   if (!s) return;
@@ -75,7 +68,6 @@ export const dropSession = (userId: string): void => {
   sessions.delete(userId);
 };
 
-/** Loads every linked user's session from SQLite (a few at a time); each runs a first check. */
 export const loadAllSessions = async (concurrency = 4): Promise<number> => {
   const ids = opts().links.userIds();
   let next = 0;
@@ -95,7 +87,6 @@ export const loadAllSessions = async (concurrency = 4): Promise<number> => {
   return loaded;
 };
 
-/** Stops every periodic check and waits (bounded) for in-flight syncs. */
 export const stopAllSessions = async (): Promise<void> => {
   const all = allSessions();
   all.forEach(s => s.stop());

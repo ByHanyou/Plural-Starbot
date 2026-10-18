@@ -6,10 +6,10 @@
   "type": "module",
   "main": "dist/index.js",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=24.7.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --sourcemap --outfile=dist/index.js",
+    "build": "tsc -p tsconfig.json --noEmit && esbuild src/index.ts --bundle --platform=node --format=esm --target=node24 --packages=external --sourcemap --outfile=dist/index.js",
     "start": "node --enable-source-maps dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^20.19.0",
+    "@types/node": "^24.7.0",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"

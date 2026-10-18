@@ -1,32 +1,19 @@
-# What this unit expects on the machine:
-#   - a system user:   useradd --system --no-create-home --shell /usr/sbin/nologin plural-starbot
-#   - the bot in /opt/plural-starbot, installed and built there on Linux (better-sqlite3 is native):
-#       npm ci && npm run build
-#   - /opt/plural-starbot/.env with DATA_DIR=/var/lib/plural-starbot (systemd creates it, see StateDirectory)
-#   - Node.js 20+ installed system-wide at the path in ExecStart (`command -v node`); a Node under a
-#     home directory, as nvm installs it, is hidden from the service by ProtectHome
-#   - an HTTPS reverse proxy forwarding AVATAR_BASE_URL to 127.0.0.1:AVATAR_PORT (the node ships none)
-# Then: copy this file to /etc/systemd/system/ and run `systemctl enable --now plural-starbot`.
-
 [Unit]
 Description=Plural Starbot (Discord bot)
 After=network.target plural-star-cloud-node.service
 
 [Service]
 Type=simple
-# Same command as `npm start`, with an absolute path to node.
-ExecStart=/usr/bin/node --enable-source-maps dist/index.js
+ExecStart=/usr/local/bin/node --enable-source-maps dist/index.js
 Restart=always
 RestartSec=5s
 User=plural-starbot
 WorkingDirectory=/opt/plural-starbot
 EnvironmentFile=/opt/plural-starbot/.env
 StateDirectory=plural-starbot
-# The database holds every linked vault's key: owner-only directory and files.
 StateDirectoryMode=0700
 UMask=0077
 
-# Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

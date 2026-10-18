@@ -1,4 +1,3 @@
-// Proxying one message: decide (match.ts), then re-post through the channel webhook and delete the original.
 import {
   AttachmentBuilder,
   EmbedBuilder,
@@ -35,23 +34,18 @@ import {
 import {isApiError, sendViaWebhook, targetOf} from './webhooks';
 import {warnHourly} from './warn';
 
-/** em space + the return-arrow emoji, after the replied-to author's name (as PluralKit shows it). */
 const REPLY_MARK = ' ' + String.fromCharCode(0x2003, 0x21a9, 0xfe0f);
 const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
 
-/** The webhook username for a member: the sender's proxy name format filled from the member's profile, sanitised for Discord. */
 export const webhookUsername = (m: Member, format: string = DEFAULT_FORMAT, sysTag = ''): string => proxyNameFor(m, format, sysTag);
 
-/** The member's avatar URL on the bot's avatar server, if the vault holds one. */
 export const memberAvatarUrl = (session: VaultSession, m: Member): string | undefined => avatarUrlFor(session, MEDIA_KEYS.memberAvatar(m.id));
 
-/** Allowed mentions for text sent on behalf of `member` in `channel`. */
 export const mentionsFor = (content: string, channel: GuildTextBasedChannel, member: GuildMember | null): AllowedMentions => {
   const everyone = !!member && !!channel.permissionsFor(member)?.has(PermissionFlagsBits.MentionEveryone);
   return allowedMentionsFor(content, everyone, id => channel.guild.roles.cache.get(id)?.mentionable === true);
 };
 
-/** Whether the bot can proxy in a channel (Manage Messages there, Manage Webhooks on the webhook's channel); warns hourly when not. */
 const canProxyIn = async (message: Message<true>): Promise<boolean> => {
   const channel = message.channel;
   const target = targetOf(channel);
@@ -100,7 +94,6 @@ const deleteQuietly = async (m: Message): Promise<void> => {
   } catch {}
 };
 
-/** Re-posts a message as `member` and deletes the original. Every failure before the delete leaves the original alone. */
 const repost = async (message: Message<true>, session: VaultSession, member: Member, text: string): Promise<void> => {
   if (!(await canProxyIn(message))) return;
   const target = targetOf(message.channel);
@@ -123,7 +116,7 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
   const chunks = splitContent(body);
   if (!chunks.length && !files.length) return;
 
-  const names = getNameSettings(message.guildId, message.author.id);
+  const names = getNameSettings(message.guildId, message.author.id, member.id);
   const username = webhookUsername(member, names.format.value, names.sysTag.value);
   const avatarURL = memberAvatarUrl(session, member);
   const allowedMentions = mentionsFor(body, message.channel, message.member);
@@ -159,7 +152,6 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
       guildId: message.guildId,
       memberId: member.id,
       userId: message.author.id,
-      // Distinct, ordered times so "last proxied message" is the last part of a split message.
       timestamp: m.createdTimestamp || now + n,
     });
   });
@@ -185,7 +177,6 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
   }
 };
 
-// Messages in one channel are proxied one after another so they keep their order.
 const queues = new Map<string, Promise<void>>();
 
 const enqueue = (key: string, task: () => Promise<void>): Promise<void> => {
@@ -197,20 +188,15 @@ const enqueue = (key: string, task: () => Promise<void>): Promise<void> => {
   return run;
 };
 
-/** messageCreate entry point. */
 export const handleMessage = async (message: Message): Promise<void> => {
   if (message.partial || !message.inGuild()) return;
   if (message.author.bot || message.webhookId || message.system) return;
   if (message.type !== MessageType.Default && message.type !== MessageType.Reply) return;
-  // Stickers and polls cannot be carried over by a webhook.
   if (message.stickers.size || message.poll) return;
-  // The starter post of a forum or media thread is the thread itself.
   if (message.channel.isThread() && message.id === message.channelId) return;
 
-  // Only users with a vault link go further (no queueing, no loading for everyone else).
   if (!peekSession(message.author.id)?.isLinked() && !hasStoredLink(message.author.id)) return;
 
-  // Queued before the session is resolved, so messages keep their order even while a vault loads.
   await enqueue(message.channelId, async () => {
     let session: VaultSession | null;
     try {
@@ -229,7 +215,6 @@ export const handleMessage = async (message: Message): Promise<void> => {
       front: session.front(),
       autoproxy,
       settings: session.settings(),
-      // Latch follows the sender's last proxied message in this server, in any channel.
       latch: autoproxy?.mode === 'latch' ? db().lastProxiedInGuild(message.author.id, message.guildId) : null,
       now: Date.now(),
     });

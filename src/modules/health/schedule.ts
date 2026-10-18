@@ -1,20 +1,11 @@
-// Schedule maths, ported from bot.py (times_from, group_schedule, compute_times,
-// due_group_names, times_label, group_times_label) plus the part of
-// discord.py's tasks.loop(time=[...]) that picks the next wake-up
-// (_get_next_sleep_time, _start_time_relative_to, resolve_datetime).
-
 import type {HealthGroup, HealthSettings} from './settings';
 import {addWallMs, assertZone, resolveWall, Wall, wallAt} from './zones';
 
-/** A time of day on the zone's wall clock. */
 export interface ClockTime {
   hour: number;
   minute: number;
 }
 
-// ---- Python int() / str.strip() -------------------------------------------
-
-// Characters Python's str.isspace() treats as whitespace.
 const PY_WS = '\\t\\n\\v\\f\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
 const STRIP_RE = new RegExp(`^[${PY_WS}]+|[${PY_WS}]+$`, 'g');
 const INT_RE = /^([+-]?)(\p{Nd}+(?:_\p{Nd}+)*)$/u;
@@ -22,8 +13,6 @@ const ND_RE = /^\p{Nd}$/u;
 
 export const pyStrip = (s: string): string => s.replace(STRIP_RE, '');
 
-// Unicode decimal digits come in runs of ten (0-9), so a digit's value is its
-// distance from the start of its run, modulo 10.
 const digitValue = (ch: string): number => {
   const cp = ch.codePointAt(0)!;
   let start = cp;
@@ -31,7 +20,6 @@ const digitValue = (ch: string): number => {
   return (cp - start) % 10;
 };
 
-/** Python int(): a str in base 10 (whitespace, sign, underscores, any Unicode digits), or a number truncated. */
 export const pyInt = (v: unknown): number => {
   if (typeof v === 'boolean') return v ? 1 : 0;
   if (typeof v === 'number') {
@@ -50,11 +38,6 @@ export const pyInt = (v: unknown): number => {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
-/**
- * The /health starttime and /health groupschedule time check:
- * `hh, mm = time.strip().split(":")`, both int(), 0-23 and 0-59.
- * Returns the normalised "HH:MM", or null when the input is not accepted.
- */
 export const parseStartTime = (raw: string): string | null => {
   try {
     const parts = pyStrip(raw).split(':');
@@ -68,15 +51,8 @@ export const parseStartTime = (raw: string): string | null => {
   }
 };
 
-/** The interval check shared by /health interval and /health groupschedule. */
 export const isValidInterval = (hours: number): boolean => !(hours < 1 || hours > 24 || 24 % hours !== 0);
 
-// ---- bot.py schedule maths ---------------------------------------------------
-
-/**
- * times_from(): a start time + interval as times of day, in generation order,
- * e.g. 08:00 every 6h -> [08:00, 14:00, 20:00, 02:00].
- */
 export const timesFrom = (startTime: string, intervalHours: unknown): ClockTime[] => {
   const parts = String(startTime).split(':');
   if (parts.length !== 2) throw new RangeError(`expected HH:MM, got '${startTime}'`);
@@ -97,20 +73,11 @@ export const timesFrom = (startTime: string, intervalHours: unknown): ClockTime[
   return times;
 };
 
-/**
- * group_schedule(): a group's own start_time / interval_hours if set, else the
- * shared ones. Absent keys mean "follow the shared schedule".
- */
 export const groupSchedule = (s: HealthSettings, group: HealthGroup): [string, number] => [
   group.start_time || s.start_time,
   pyInt(group.interval_hours || s.interval_hours),
 ];
 
-/**
- * compute_times(): every minute the loop must wake at, sorted: the union of the
- * shared schedule and each group's own. Each firing then sends only the groups
- * actually due at that minute.
- */
 export const computeTimes = (s: HealthSettings): ClockTime[] => {
   assertZone(s.timezone);
   const byMinute = new Map<number, ClockTime>();
@@ -122,11 +89,6 @@ export const computeTimes = (s: HealthSettings): ClockTime[] => {
   return [...byMinute.keys()].sort((a, b) => a - b).map(k => byMinute.get(k)!);
 };
 
-/**
- * due_group_names(): groups whose schedule includes this firing, given the
- * zone's wall clock now. The two-minute grace covers a callback that lands
- * late, including across midnight.
- */
 export const dueGroupNames = (s: HealthSettings, now: Wall): string[] => {
   assertZone(s.timezone);
   const nowSec = now.hour * 3600 + now.minute * 60 + now.second + now.ms / 1000;
@@ -146,7 +108,6 @@ export const dueGroupNames = (s: HealthSettings, now: Wall): string[] => {
 
 export const formatClock = (t: ClockTime): string => `${pad2(t.hour)}:${pad2(t.minute)}`;
 
-/** times_label(): the SHARED schedule's fire times (group overrides render separately). */
 export const timesLabel = (s: HealthSettings): string => {
   try {
     assertZone(s.timezone);
@@ -156,7 +117,6 @@ export const timesLabel = (s: HealthSettings): string => {
   }
 };
 
-/** group_times_label(): one group's fire times (its own schedule or the shared one). */
 export const groupTimesLabel = (s: HealthSettings, group: HealthGroup): string => {
   try {
     const [st, iv] = groupSchedule(s, group);
@@ -167,20 +127,11 @@ export const groupTimesLabel = (s: HealthSettings, group: HealthGroup): string =
   }
 };
 
-// ---- discord.py tasks.loop(time=[...]) ----------------------------------------
-
 const cmpTuple = (a: number[], b: number[]): number => {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
   return 0;
 };
 
-/**
- * The instant (epoch ms) the loop sleeps until next, given the loop's times and
- * zone and the current instant: the first time of day at or after the current
- * wall-clock time today, else the first time tomorrow, resolved through DST
- * (a time in a spring-forward gap moves forward by the gap, a repeated time
- * fires on its second occurrence). A time equal to now counts as upcoming.
- */
 export const nextFireTime = (times: ClockTime[], zone: string, nowMs: number): number => {
   if (!times.length) throw new RangeError('time parameter must not be an empty sequence.');
   const sorted = [...times].sort((a, b) => a.hour - b.hour || a.minute - b.minute);

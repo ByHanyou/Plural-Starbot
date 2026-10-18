@@ -1,6 +1,4 @@
-// Member, system and front embeds, laid out like the app's read-mode profile (MemberModal readOnly),
-// SystemProfileCard and the Front tab. Pure: builds plain embed JSON; no Discord runtime imports.
-import type {APIEmbed, APIEmbedField} from 'discord.js';
+import {ActionRowBuilder, type APIEmbed, type APIEmbedField, ButtonBuilder, ButtonStyle, ContainerBuilder} from 'discord.js';
 import type {AppSettings, CustomFieldDef, FrontState, FrontTier, Member, MemberGroup, SystemInfo} from '../../vault/types';
 import {ellipsize, embedColor} from '../proxy/text';
 import {fmtDur, frontSessionStart, nameCompare, orderFronters, tierName, TIER_ORDER, translateMood} from './frontLogic';
@@ -23,10 +21,6 @@ const embedLength = (e: APIEmbed): number =>
   (e.author?.name.length || 0) +
   (e.fields || []).reduce((n, f) => n + f.name.length + f.value.length, 0);
 
-/**
- * Drops fields from the end until the embed fits Discord's limits (25 fields, 6000 characters), keeping
- * the last `keepLast` fields until nothing else is left to drop. Returns how many were dropped.
- */
 const fitFields = (e: APIEmbed, reserve = 0, keepLast = 0): number => {
   const fields = e.fields || [];
   let dropped = 0;
@@ -38,19 +32,11 @@ const fitFields = (e: APIEmbed, reserve = 0, keepLast = 0): number => {
   return dropped;
 };
 
-/** Footer note for fields left out to fit Discord's limits. */
 const notShown = (dropped: number): string => (dropped ? `${dropped} more field${dropped === 1 ? '' : 's'} not shown` : '');
 
-/**
- * A banner as an embed of its own, sent above the card: the app shows the banner at the top of a
- * profile, and an embed's image always sits at its bottom.
- */
 const bannerEmbed = (url: string, color: number | null): APIEmbed => (color !== null ? {color, image: {url}} : {image: {url}});
 
-/** A chip shown as inline code (the app's chips), or escaped text when the value holds a backtick. */
 const chip = (s: string): string => (s.includes('`') ? escapeText(s) : '`' + s + '`');
-
-// ---- groups (src/utils.ts: groupKind, childrenOf, sortGroupsForDisplay) ----------------
 
 const groupKind = (g: MemberGroup): 'group' | 'subsystem' => (g.kind === 'subsystem' ? 'subsystem' : 'group');
 const groupParent = (g: MemberGroup): string | null => g.parentId ?? null;
@@ -81,24 +67,15 @@ const sortGroupsForDisplay = (list: MemberGroup[], all: MemberGroup[]): MemberGr
   return [...list].sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 };
 
-/** The app marks a group with a round dot and a sub-system with a square one. */
 const groupChip = (g: MemberGroup): string => `${groupKind(g) === 'subsystem' ? '■' : '●'} ${escapeText(str(g.name) || '-')}`;
 
-/** The app's linkedSubsystemsOf: sub-systems whose linked member is this one. */
 const linkedSubsystemsOf = (groups: MemberGroup[], memberId: string): MemberGroup[] =>
   memberId ? groups.filter(g => groupKind(g) === 'subsystem' && g.linkedMemberId === memberId) : [];
-
-// ---- custom fields (MemberModal's read-mode Custom Fields section) --------------------
 
 type DateMode = 'date' | 'datetime' | 'monthYear' | 'month' | 'year' | 'monthDay';
 const DATE_MODES: Record<string, DateMode> = {date: 'date', timestamp: 'datetime', monthYear: 'monthYear', month: 'month', year: 'year', monthDay: 'monthDay'};
 const LOCALE = 'en-US';
 
-/**
- * The Date MemberModal derives from a stored date-type value, and whether the value was an instant
- * (epoch milliseconds, which the app's date editor stores) rather than a calendar date the app builds
- * from its parts (a bare year, "YYYY-MM-DD", other date text).
- */
 const dateOf = (val: unknown): {date: Date; instant: boolean} => {
   const bareNum = typeof val === 'number' ? val : typeof val === 'string' && val.trim() && Number.isFinite(Number(val)) ? Number(val) : NaN;
   if (!Number.isNaN(bareNum) && Number.isInteger(bareNum) && bareNum >= 1000 && bareNum <= 9999) return {date: new Date(bareNum, 0, 1), instant: false};
@@ -114,11 +91,6 @@ const dateOf = (val: unknown): {date: Date; instant: boolean} => {
   return {date: new Date(), instant: false};
 };
 
-/**
- * DateTimeEditor's read-only summary in English. The app formats in the device's time zone, so an
- * instant shown as a date, and a date and time, become Discord timestamps (each viewer's time zone);
- * a calendar date is formatted from its own parts.
- */
 const fmtDate = (date: Date, mode: DateMode, instant: boolean): string => {
   if (Number.isNaN(date.getTime())) return '';
   if (mode === 'year') return String(date.getFullYear());
@@ -132,7 +104,6 @@ const fmtDate = (date: Date, mode: DateMode, instant: boolean): string => {
   return `<t:${Math.floor(date.getTime() / 1000)}:f>`;
 };
 
-/** A custom field value as text, or null when the app shows nothing for it. */
 export const customFieldText = (fd: CustomFieldDef, val: unknown, names?: MentionNames): string | null => {
   if (val === undefined || val === null || val === '') return null;
   const mode = DATE_MODES[fd.type];
@@ -157,104 +128,192 @@ export const customFieldText = (fd: CustomFieldDef, val: unknown, names?: Mentio
   return escapeText(String(val || '')) || null;
 };
 
-// ---- member -------------------------------------------------------------------------
+export interface MemberCardNav {
+  ownerId: string;
+  privateView: boolean;
+}
+
+export interface MemberPageRef extends MemberCardNav {
+  page: number;
+  ownerView: boolean;
+  memberId: string;
+}
+
+export type CardComponents = (ContainerBuilder | ActionRowBuilder<ButtonBuilder>)[];
 
 export interface MemberCardInput {
   member: Member;
   groups: MemberGroup[];
   fieldDefs: CustomFieldDef[];
-  /** Names for description mentions (only members the viewer may see). */
   names?: MentionNames;
   avatarUrl?: string;
   bannerUrl?: string;
-  /**
-   * The viewer is the vault's own user. Linked Sub-systems are shown only then: the app hides them on
-   * someone else's member (MirrorScreen opens it with lockRead).
-   */
   ownerView?: boolean;
+  page?: number;
+  nav?: MemberCardNav;
 }
 
 const LINKED_SUBSYSTEMS = '**Linked Sub-systems**';
 const DESCRIPTION_BIO = '**Description / Bio**';
 const CUSTOM_FIELDS = '**Custom Fields**';
 
-/**
- * The read-mode profile (MemberModal readOnly). The banner, when there is one, is an embed of its own
- * above the card. The card: avatar and name; then in the description, in the app's order, pronouns,
- * role, the colour and emoji chips, tags, groups, Linked Sub-systems (vault owner only),
- * "Description / Bio" with the bio (up to Discord's 4096 characters), and the "Custom Fields" heading;
- * the custom fields follow as fields in the system's field order. A custom front is a status card
- * (name, colour, description); a facet is labelled "Facet".
- */
-export const memberCard = (i: MemberCardInput): APIEmbed[] => {
+export const MEMBER_PAGE_ID = 'profiles:member-page:';
+const PAGE_LABEL_ID = 'profiles:member-page-label';
+const V2_LIMIT = {components: 40, text: 4000, customId: 100};
+const FIELD_PAGE_FRAME = 6;
+
+const memberPageId = (page: number, nav: MemberCardNav, ownerView: boolean, memberId: string): string =>
+  `${MEMBER_PAGE_ID}${page}:${nav.ownerId}:${nav.privateView ? 1 : 0}:${ownerView ? 1 : 0}:${memberId}`;
+
+export const parseMemberPageId = (customId: string): MemberPageRef | null => {
+  if (!customId.startsWith(MEMBER_PAGE_ID)) return null;
+  const m = /^(\d{1,4}):(\d{1,20}):([01]):([01]):(.+)$/.exec(customId.slice(MEMBER_PAGE_ID.length));
+  return m ? {page: Number(m[1]), ownerId: m[2], privateView: m[3] === '1', ownerView: m[4] === '1', memberId: m[5]} : null;
+};
+
+const heading = (name: string): string => `## ${escapeText(ellipsize(name, LIMIT.title))}`;
+
+const textLength = (parts: string[]): number => parts.reduce((n, s) => n + s.length, 0);
+
+const fitTexts = (parts: string[], max: number): string[] => {
+  const out = [...parts];
+  let over = textLength(out) - max;
+  while (over > 0) {
+    let k = 0;
+    for (let j = 1; j < out.length; j++) if (out[j].length > out[k].length) k = j;
+    const room = out[k].length - over;
+    out[k] = room < 2 ? '' : capText(out[k], room);
+    over = textLength(out) - max;
+  }
+  return out;
+};
+
+const addText = (box: ContainerBuilder, text: string): void => {
+  if (text) box.addTextDisplayComponents(t => t.setContent(text));
+};
+
+const addHeader = (box: ContainerBuilder, text: string, avatarUrl: string | undefined): void => {
+  if (!text) return;
+  if (!avatarUrl) {
+    addText(box, text);
+    return;
+  }
+  const url = avatarUrl;
+  box.addSectionComponents(s => s.addTextDisplayComponents(t => t.setContent(text)).setThumbnailAccessory(a => a.setURL(url)));
+};
+
+const addBanner = (box: ContainerBuilder, bannerUrl: string | undefined): void => {
+  if (!bannerUrl) return;
+  const url = bannerUrl;
+  box.addMediaGalleryComponents(g => g.addItems(item => item.setURL(url)));
+};
+
+const pageFields = (items: string[]): string[][] => {
+  const perPage = V2_LIMIT.components - FIELD_PAGE_FRAME;
+  const budget = V2_LIMIT.text - CUSTOM_FIELDS.length;
+  const pages: string[][] = [];
+  let page: string[] = [];
+  let used = 0;
+  for (const item of items) {
+    const text = capText(item, budget);
+    if (page.length && (page.length >= perPage || used + text.length > budget)) {
+      pages.push(page);
+      page = [];
+      used = 0;
+    }
+    page.push(text);
+    used += text.length;
+  }
+  if (page.length) pages.push(page);
+  return pages;
+};
+
+const navRow = (
+  memberId: string,
+  page: number,
+  pages: number,
+  nav: MemberCardNav | undefined,
+  ownerView: boolean,
+): ActionRowBuilder<ButtonBuilder> | null => {
+  if (!nav || pages < 2) return null;
+  const prev = memberPageId(Math.max(0, page - 1), nav, ownerView, memberId);
+  const next = memberPageId(Math.min(pages - 1, page + 1), nav, ownerView, memberId);
+  if (prev.length > V2_LIMIT.customId || next.length > V2_LIMIT.customId) return null;
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(prev).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId(PAGE_LABEL_ID).setLabel(`Page ${page + 1} of ${pages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+    new ButtonBuilder().setCustomId(next).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page === pages - 1),
+  );
+};
+
+export const memberCard = (i: MemberCardInput): CardComponents => {
   const m = i.member;
   const name = str(m.name) || 'Member';
   const color = embedColor(m.color);
-  const e: APIEmbed = {};
-  if (color !== null) e.color = color;
+  const box = new ContainerBuilder();
+  if (color !== null) box.setAccentColor(color);
 
   if (m.isCustomFront) {
-    e.title = ellipsize(name, LIMIT.title);
-    const desc = capText(descriptionToDiscord(m.description, i.names), LIMIT.description);
-    if (desc) e.description = desc;
-    return [e];
+    const [title, desc] = fitTexts([heading(name), descriptionToDiscord(m.description, i.names)], V2_LIMIT.text);
+    addText(box, title);
+    addText(box, desc);
+    return [box];
   }
 
-  e.title = ellipsize(name, LIMIT.title);
-  if (i.avatarUrl) e.thumbnail = {url: i.avatarUrl};
-
-  const head: string[] = [];
+  const head: string[] = [heading(name)];
   if (str(m.pronouns)) head.push(escapeText(str(m.pronouns)));
   if (str(m.role)) head.push(`*${escapeText(str(m.role))}*`);
-  // The app's colour chip is a swatch and the hex value; the swatch is the embed's colour bar here.
   const chips: string[] = [];
   if (str(m.color)) chips.push(chip(str(m.color)));
   if (str(m.emoji)) chips.push(str(m.emoji));
-  if (chips.length) head.push(chips.join(' · '));
+  const badges: string[] = [];
+  if (chips.length) badges.push(chips.join(' · '));
   const tags = Array.isArray(m.tags) ? m.tags.map(str).filter(Boolean) : [];
-  if (tags.length) head.push(tags.map(chip).join(' '));
+  if (tags.length) badges.push(tags.map(chip).join(' '));
   const allGroups = (Array.isArray(i.groups) ? i.groups : []).filter(g => g && typeof g === 'object' && typeof g.id === 'string');
   const mine = Array.isArray(m.groupIds) ? m.groupIds : [];
   const active = sortGroupsForDisplay(allGroups.filter(g => mine.includes(g.id)), allGroups);
-  if (active.length) head.push(active.map(groupChip).join(' '));
+  if (active.length) badges.push(active.map(groupChip).join(' '));
 
-  const sections: string[] = [];
-  if (head.length) sections.push(head.join('\n'));
+  let linked = '';
   if (i.ownerView) {
     const linkedSubs = sortGroupsForDisplay(linkedSubsystemsOf(allGroups, m.id), allGroups);
-    if (linkedSubs.length) sections.push(`${LINKED_SUBSYSTEMS}\n${linkedSubs.map(groupChip).join(' ')}`);
+    if (linkedSubs.length) linked = `${LINKED_SUBSYSTEMS}\n${linkedSubs.map(groupChip).join(' ')}`;
   }
   const bio = descriptionToDiscord(m.description, i.names);
-  if (bio) sections.push(`${DESCRIPTION_BIO}\n${bio}`);
 
-  const custom: APIEmbedField[] = [];
+  const custom: string[] = [];
   const values = Array.isArray(m.customFields) ? m.customFields : [];
   for (const fd of Array.isArray(i.fieldDefs) ? i.fieldDefs : []) {
     if (!fd || typeof fd !== 'object' || typeof fd.id !== 'string') continue;
     const text = customFieldText(fd, values.find(v => v && v.fieldId === fd.id)?.value, i.names);
-    const f = text ? field(str(fd.name) || '-', text) : null;
-    if (f) custom.push(f);
+    if (text && text.trim()) custom.push(`**${escapeText(ellipsize(str(fd.name) || '-', LIMIT.fieldName))}**\n${text}`);
   }
 
-  const heading = custom.length ? CUSTOM_FIELDS : '';
-  const body = capText(sections.join('\n\n'), LIMIT.description - (heading ? heading.length + 2 : 0));
-  const description = [body, heading].filter(Boolean).join('\n\n');
-  if (description) e.description = description;
+  const fieldPages = pageFields(custom);
+  const pages = 1 + fieldPages.length;
+  const asked = Math.min(Math.max(i.page ?? 0, 0), pages - 1);
+  const nav = navRow(m.id, asked, pages, i.nav, i.ownerView === true);
+  const page = nav ? asked : 0;
 
-  e.fields = [...custom];
-  const footer = m.isFacet ? 'Facet' : '';
-  const dropped = fitFields(e, footer.length + 40);
-  if (heading && !(e.fields || []).some(f => custom.includes(f))) {
-    // Every custom field had to be left out: no heading over nothing.
-    if (body) e.description = body;
-    else delete e.description;
+  if (page > 0) {
+    addText(box, CUSTOM_FIELDS);
+    for (const text of fieldPages[page - 1]) addText(box, text);
+  } else {
+    const footer = [m.isFacet ? 'Facet' : '', nav ? '' : notShown(custom.length)].filter(Boolean).join(' · ');
+    const [top, middle, subs, about, foot] = fitTexts(
+      [head.join('\n'), badges.join('\n'), linked, bio ? `${DESCRIPTION_BIO}\n${bio}` : '', footer ? `-# ${footer}` : ''],
+      V2_LIMIT.text,
+    );
+    addBanner(box, i.bannerUrl);
+    addHeader(box, top, i.avatarUrl);
+    addText(box, middle);
+    addText(box, subs);
+    addText(box, about);
+    addText(box, foot);
   }
-  const footerText = [footer, notShown(dropped)].filter(Boolean).join(' · ');
-  if (footerText) e.footer = {text: footerText};
-  return i.bannerUrl ? [bannerEmbed(i.bannerUrl, color), e] : [e];
+  return nav ? [box, nav] : [box];
 };
-
-// ---- system -------------------------------------------------------------------------
 
 export interface SystemCardInput {
   system: SystemInfo | null;
@@ -265,38 +324,30 @@ export interface SystemCardInput {
   bannerUrl?: string;
 }
 
-/** Members counted on the system card: roster members that are not private, deleted or archived. */
 export const publicRosterCount = (members: Member[]): number =>
   visibleMembers(members, false).filter(isRosterMember).length;
 
-/**
- * SystemProfileCard: the banner (an embed of its own above the card, as the app shows it at the top),
- * then avatar, name, description, plus the member count and the linked account.
- */
-export const systemCard = (i: SystemCardInput): APIEmbed[] => {
-  const e: APIEmbed = {title: ellipsize(str(i.system?.name) || 'Unnamed System', LIMIT.title)};
-  if (i.avatarUrl) e.thumbnail = {url: i.avatarUrl};
-  e.description = capText(descriptionToDiscord(i.system?.description, i.names), LIMIT.description) || '*No description yet.*';
-  e.fields = [
-    {name: 'Members', value: String(publicRosterCount(i.members)), inline: true},
-    {name: 'Linked Discord account', value: `<@${i.discordUserId}>`, inline: true},
-  ];
-  return i.bannerUrl ? [bannerEmbed(i.bannerUrl, null), e] : [e];
+export const systemCard = (i: SystemCardInput): CardComponents => {
+  const box = new ContainerBuilder();
+  const [top, about, facts] = fitTexts(
+    [
+      heading(str(i.system?.name) || 'Unnamed System'),
+      descriptionToDiscord(i.system?.description, i.names) || '*No description yet.*',
+      `**Members:** ${publicRosterCount(i.members)}\n**Linked Discord account:** <@${i.discordUserId}>`,
+    ],
+    V2_LIMIT.text,
+  );
+  addBanner(box, i.bannerUrl);
+  addHeader(box, top, i.avatarUrl);
+  addText(box, about);
+  addText(box, facts);
+  return [box];
 };
-
-// ---- front --------------------------------------------------------------------------
 
 export interface FrontViewInput {
   front: FrontState | null;
-  /** Every member record of the vault (ps:members). */
   members: Member[];
-  /** Whether private members are shown (only ever for the vault's own user). */
   own: boolean;
-  /**
-   * The viewer is the vault's own user: each tier shows its mood, location, energy and note, as the
-   * app's Front tab does. Anyone else sees the primary tier's mood, location and note only, as the app
-   * shares a front (buildFrontShare). Defaults to `own`.
-   */
   ownerView?: boolean;
   settings: AppSettings | null;
   systemName: string;
@@ -305,9 +356,7 @@ export interface FrontViewInput {
 }
 
 export interface FrontView {
-  /** Null when nobody the viewer may see is fronting. */
   embed: APIEmbed | null;
-  /** True when the embed names a private member (only ever for the vault's own user). */
   showsPrivate: boolean;
 }
 
@@ -328,7 +377,6 @@ const capLines = (lines: string[], max: number): string => {
   return out.join('\n');
 };
 
-/** A tier's energy as the Front tab shows it ("7/10"), or '' when it has none. */
 const energyOf = (tier: FrontTier | undefined): string => {
   const n: unknown = tier?.energyLevel;
   if (typeof n === 'number' && Number.isFinite(n) && n) return `${n}/10`;
@@ -336,11 +384,6 @@ const energyOf = (tier: FrontTier | undefined): string => {
   return '';
 };
 
-/**
- * The Front tab: each tier in order with its members and how long each has fronted, and the tier's
- * mood, location, energy and note (for anyone but the vault's own user, the primary tier's mood,
- * location and note only).
- */
 export const frontView = (i: FrontViewInput): FrontView => {
   const front = i.front;
   if (!front) return {embed: null, showsPrivate: false};

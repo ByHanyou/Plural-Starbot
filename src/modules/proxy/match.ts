@@ -1,4 +1,3 @@
-// Pure proxy decisions: emoji tag matching, the backslash escape and autoproxy. No Discord or database imports.
 import type {AppSettings, FrontState, Member} from '../../vault/types';
 import {orderFronters} from '../profiles/frontLogic';
 
@@ -11,13 +10,10 @@ const BACKSLASH = 0x5c;
 
 export type AutoproxySetting = {mode: 'front'} | {mode: 'member'; memberId: string} | {mode: 'latch'};
 
-/** How long a latch lasts: until this long after the user's last proxied message in the server. */
 export const LATCH_HOURS = 6;
 export const LATCH_TIMEOUT_MS = LATCH_HOURS * 60 * 60 * 1000;
 
-/** The user's last proxied message in the server (any channel), which latch autoproxy follows. */
 export interface LatchRecord {
-  /** Vault member id that message was proxied as. */
   memberId: string;
   timestamp: number;
 }
@@ -25,40 +21,28 @@ export interface LatchRecord {
 export interface TagMatch {
   member: Member;
   tag: ProxyTag;
-  /** Content to post: the inner text, or the whole message when the member keeps proxy tags. Trimmed. */
   content: string;
 }
 
 export type ProxyPlan =
   | {kind: 'none'}
-  /** Started with a backslash: never proxied. `content` is the text with one backslash removed. */
   | {kind: 'escaped'; content: string}
   | {kind: 'proxy'; via: 'tag' | 'autoproxy'; member: Member; content: string};
 
 export interface PlanInput {
   content: string;
   hasAttachments: boolean;
-  /** Every member record of the sender's own vault (ps:members), unfiltered. */
   members: Member[];
   front: FrontState | null;
   autoproxy: AutoproxySetting | null;
-  /** The sender's ps:settings (front sort order for autoproxy by front and for emoji tags several members share). */
   settings?: AppSettings | null;
-  /** For autoproxy latch: the sender's last proxied message in this server, any channel (null: none). */
   latch?: LatchRecord | null;
-  /** The time the latch timeout is measured at (default: now). */
   now?: number;
 }
 
-/** Members that can be proxied as: present, not deleted, not archived, not a custom front. Private members are allowed (own vault only). */
 export const isProxyable = (m: Member | null | undefined): m is Member =>
   !!m && typeof m === 'object' && typeof m.id === 'string' && !!m.id && !m.deleted && !m.archived && !m.isCustomFront;
 
-/**
- * The text between the tags, or null when the message does not carry the tag.
- * Exact and case-sensitive. A message that is only the tag (spaces inside the
- * tag trimmed away by Discord) matches with empty inner text, for attachment-only messages.
- */
 export const innerText = (input: string, tag: ProxyTag): string | null => {
   const {prefix, suffix} = tag;
   if (!prefix && !suffix) return null;
@@ -70,10 +54,6 @@ export const innerText = (input: string, tag: ProxyTag): string | null => {
   return null;
 };
 
-/**
- * The members of the primary tier that can be proxied as, in the order the app's Front tab lists them
- * (orderFronters with the system's front sort order).
- */
 const primaryFronters = (front: FrontState | null, members: Member[], settings?: AppSettings | null): Member[] => {
   const ids = front?.primary?.memberIds;
   if (!Array.isArray(ids)) return [];
@@ -94,33 +74,18 @@ const primaryFronters = (front: FrontState | null, members: Member[], settings?:
   return out;
 };
 
-/**
- * The first member of the primary tier, as the app's Front tab lists it (orderFronters with the
- * system's front sort order), that can be proxied as.
- */
 export const firstPrimaryFronter = (front: FrontState | null, members: Member[], settings?: AppSettings | null): Member | null =>
   primaryFronters(front, members, settings)[0] ?? null;
 
-/** A member's emoji proxy tag: the whole profile Emoji field, trimmed; '' when there is none. */
 export const emojiTagOf = (m: Member): string => (typeof m.emoji === 'string' ? m.emoji.trim() : '');
 
-// Keyboards, the app and Discord's emoji picker write the same emoji with or without presentation selectors
-// (U+FE0E/U+FE0F) and joiners (U+200D): Discord sends 👁‍🗨 for :eye_in_speech_bubble:, a profile may hold 👁️🗨️.
-// Tags are therefore compared without them.
 const EMOJI_GLUE = /[\uFE0E\uFE0F\u200D]/gu;
-/** An emoji tag as people see it: without presentation selectors or joiners. */
 export const emojiTagKey = (tag: string): string => tag.replace(EMOJI_GLUE, '');
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const GLUE = '[\uFE0E\uFE0F\u200D]*';
-/** Something that would continue the emoji a tag ends with: a selector, joiner, keycap or skin tone. */
 const CONTINUES = '[\uFE0E\uFE0F\u200D\u20E3\u{1F3FB}-\u{1F3FF}]';
 
-/**
- * Where an emoji tag (by its key) sits at the start or the end of a message: selectors and joiners inside it
- * are ignored, and it never matches only part of a longer emoji (one continued by a joiner, keycap or skin tone).
- * Returns the text left once the tag is taken off, or null.
- */
 const emojiTagInner = (input: string, key: string, at: 'start' | 'end'): string | null => {
   const body = Array.from(key).map(escapeRe).join(GLUE);
   if (at === 'start') {
@@ -132,16 +97,9 @@ const emojiTagInner = (input: string, key: string, at: 'start' | 'end'): string 
 };
 
 export interface EmojiTagMatch extends TagMatch {
-  /** The text without the tag and the whitespace next to it, trimmed; '' when the message is only the tag. */
   inner: string;
 }
 
-/**
- * Emoji proxy tags: a member's emoji tag at the start or at the end of the message, each end matched
- * like a prefix-only or suffix-only tag (innerText). The longest matching tag wins; on equal length the
- * one at the start. A tag several members share goes to the first of them in the primary front (as the
- * app's Front tab lists it), or, when none of them is fronting, to the first of them in ps:members.
- */
 export const matchEmojiTags = (input: string, members: Member[], front: FrontState | null, settings?: AppSettings | null): EmojiTagMatch | null => {
   const owners = new Map<string, Member[]>();
   for (const member of members) {
@@ -155,7 +113,6 @@ export const matchEmojiTags = (input: string, members: Member[], front: FrontSta
   let best: {key: string; size: number; tag: ProxyTag; inner: string} | null = null;
   for (const key of owners.keys()) {
     const size = Array.from(key).length;
-    // The start is tried first, so a tag at both ends is taken from the start.
     for (const at of ['start', 'end'] as const) {
       const inner = emojiTagInner(input, key, at);
       if (inner === null) continue;
@@ -175,17 +132,12 @@ export const matchEmojiTags = (input: string, members: Member[], front: FrontSta
   return {member, tag: best.tag, inner: best.inner.trim(), content: (member.pkKeepProxy === true ? input : best.inner).trim()};
 };
 
-/**
- * The member latch autoproxy sends as: the member of the last proxied message, unless that message is
- * more than LATCH_TIMEOUT_MS old or the member can no longer be proxied as (then null).
- */
 export const latchMember = (last: LatchRecord | null | undefined, members: Member[], now: number = Date.now()): Member | null => {
   if (!last || now - last.timestamp > LATCH_TIMEOUT_MS) return null;
   const m = members.find(x => x && x.id === last.memberId);
   return isProxyable(m) ? m : null;
 };
 
-/** The member autoproxy sends as right now, or null. `latch` and `now` are only used by the latch mode. */
 export const autoproxyMember = (
   setting: AutoproxySetting | null,
   members: Member[],
@@ -201,12 +153,6 @@ export const autoproxyMember = (
   return isProxyable(m) ? m : null;
 };
 
-/**
- * Decides what to do with one message from a linked user.
- * Backslash first (never proxied), then an emoji tag, then autoproxy.
- * Nothing is proxied when there would be neither text nor attachments to post, or when the message is
- * only an emoji tag and has no attachments.
- */
 export const planProxy = (i: PlanInput): ProxyPlan => {
   if (i.content.charCodeAt(0) === BACKSLASH) return {kind: 'escaped', content: i.content.slice(1)};
   const emoji = matchEmojiTags(i.content, i.members, i.front, i.settings);
@@ -221,7 +167,6 @@ export const planProxy = (i: PlanInput): ProxyPlan => {
   return {kind: 'proxy', via: 'autoproxy', member: auto, content};
 };
 
-/** Normalises a stored autoproxy value; anything unrecognised is treated as off. */
 export const parseAutoproxy = (v: unknown): AutoproxySetting | null => {
   if (!v || typeof v !== 'object') return null;
   const o = v as {mode?: unknown; memberId?: unknown};
@@ -231,7 +176,6 @@ export const parseAutoproxy = (v: unknown): AutoproxySetting | null => {
   return null;
 };
 
-/** The name a member is shown by, as in the app: name, or the nickname only when the name is blank. */
 export const displayNameOf = (m: Member): string => {
   const name = String(m.name ?? '').trim();
   if (name) return name;
@@ -240,10 +184,6 @@ export const displayNameOf = (m: Member): string => {
 
 export type MemberLookup = {kind: 'found'; member: Member} | {kind: 'none'} | {kind: 'ambiguous'; count: number};
 
-/**
- * Finds one of the user's proxyable members by vault id, then display name, then name, then nickname
- * (case-insensitive, trimmed). Each step stops at the first that has any match.
- */
 export const findMember = (members: Member[], query: string): MemberLookup => {
   const q = query.trim();
   if (!q) return {kind: 'none'};
@@ -257,5 +197,14 @@ export const findMember = (members: Member[], query: string): MemberLookup => {
     if (hits.length === 1) return {kind: 'found', member: hits[0]};
     if (hits.length > 1) return {kind: 'ambiguous', count: hits.length};
   }
+  return {kind: 'none'};
+};
+
+export const findMemberByEmoji = (members: Member[], query: string): MemberLookup => {
+  const key = emojiTagKey(query.trim());
+  if (!key) return {kind: 'none'};
+  const hits = members.filter(isProxyable).filter(m => emojiTagKey(emojiTagOf(m)) === key);
+  if (hits.length === 1) return {kind: 'found', member: hits[0]};
+  if (hits.length > 1) return {kind: 'ambiguous', count: hits.length};
   return {kind: 'none'};
 };

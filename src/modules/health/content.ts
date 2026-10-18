@@ -1,20 +1,3 @@
-// content.ts
-// ---------------------------------------------------------------------------
-// All the words the health reminders say, ported verbatim from the Python bot's
-// content.py (same lists, same strings, same order, same counts).
-//
-//   NUDGES  = friendly check-ins (40 each: food, hydration, meds, activity,
-//             eye strain, grooming, teeth, shower, kind-to-yourself,
-//             kind-to-others, kind-to-animals, kind-misc)
-//   FACTS   = interesting tidbits (40 each: food, hydration, medicine,
-//             activity, eyes, grooming, teeth, shower, kindness [shared by
-//             all four kindness topics])
-//
-// Tone goal: a warm nudge from a friend, never an interrogation.
-// ---------------------------------------------------------------------------
-
-// ------------------------------- NUDGES ------------------------------------
-
 export const FOOD_NUDGES: readonly string[] = [
   "Hey, quick check: have you eaten anything recently? Even a small snack counts.",
   "Friendly reminder: your body runs better with fuel. Grabbed a bite lately?",
@@ -531,8 +514,6 @@ export const KINDMISC_NUDGES: readonly string[] = [
   "Consider this your official invitation to leave the world one notch nicer than you found it.",
 ];
 
-// -------------------------------- FACTS ------------------------------------
-
 export const FOOD_FACTS: readonly string[] = [
   "Your brain uses about 20% of your daily calories, despite being only about 2% of your body weight.",
   "Fiber isn't digested by you; it feeds the trillions of helpful bacteria living in your gut.",
@@ -919,9 +900,6 @@ export const KINDNESS_FACTS: readonly string[] = [
   "Kind self-talk during hard tasks improves persistence; athletes are literally coached to do it.",
   "Niceness and kindness aren't the same thing: nice aims to keep things pleasant, kind aims to actually help, and sometimes the kindest choice isn't the nicest-sounding one.",
 ];
-// ---------------------- Wire topics to their content and their look -----------------------
-// (bot.py's NUDGES, FACTS, TOPIC_META and DEFAULT_COLOR; group colours are in
-// DEFAULT_SETTINGS in settings.ts, exactly as bot.py keeps them.)
 
 export const NUDGES: Readonly<Record<string, readonly string[]>> = {
   food: FOOD_NUDGES,
@@ -947,7 +925,6 @@ export const FACTS: Readonly<Record<string, readonly string[]>> = {
   grooming: GROOMING_FACTS,
   teeth: TEETH_FACTS,
   shower: SHOWER_FACTS,
-  // One shared pool for all four kindness nudge topics.
   kindness: KINDNESS_FACTS,
 };
 

@@ -1,12 +1,11 @@
-// /member, /system and /front.
-import {APIEmbed, ChatInputCommandInteraction, escapeMarkdown, MessageFlags, SlashCommandBuilder, User} from 'discord.js';
+import {APIEmbed, ButtonInteraction, ChatInputCommandInteraction, escapeMarkdown, MessageFlags, SlashCommandBuilder, User} from 'discord.js';
 import {avatarUrlFor} from '../../avatars';
 import {CloudError} from '../../cloud/cloudTypes';
 import {log} from '../../log';
 import {linkedSession, peekSession} from '../../vault/registry';
-import {LINK_BROKEN_TEXT, type PushResult, type VaultSession} from '../../vault/session';
+import {LINK_BROKEN_TEXT, NO_DATA_TEXT, type PushResult, type VaultSession} from '../../vault/session';
 import {FrontState, FrontTierKey, MEDIA_KEYS, Member, VAULT_KEYS} from '../../vault/types';
-import {frontView, memberCard, systemCard} from './cards';
+import {type CardComponents, frontView, memberCard, parseMemberPageId, systemCard} from './cards';
 import {allFrontMemberIds, clearTiers, FrontTiers, quickAddTiers, readFront, removeTiers, setFrontTiers, updateFront} from './frontLogic';
 import {findByName, isShown, nameCandidates, visibleMembers} from './lookup';
 import type {MentionNames} from './richText';
@@ -15,6 +14,7 @@ const NOT_LINKED = 'Link your vault first: DM me /link';
 const SERVER_ONLY = 'This command only works in a server.';
 const NOT_LOADED = 'That vault could not be read just now. Try again in a minute.';
 const NOBODY = 'Nobody is fronting.';
+const GONE = 'This profile is no longer available.';
 
 const TIER_CHOICES = [
   {name: 'Primary', value: 'primary'},
@@ -67,15 +67,6 @@ export const frontCommand = new SlashCommandBuilder()
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-// ---- replying --------------------------------------------------------------------
-//
-// Private members are shown only to their own user, in a reply only that user sees. Discord fixes a
-// deferred reply's visibility when it is deferred, so each command decides up front, from the vault
-// already in memory, whether its answer could name a private member (or count one among the members
-// a name matches). When the caller's own vault is not in memory yet there is nothing to decide from,
-// so the reply goes to the caller only. A public reply never names a private member: it is rendered
-// as everyone else would see it.
-
 interface Payload {
   content?: string;
   embeds?: APIEmbed[];
@@ -88,19 +79,21 @@ const say = async (i: ChatInputCommandInteraction, p: Payload): Promise<void> =>
   await i.editReply({content: p.content ?? '', embeds: p.embeds ?? [], allowedMentions: {parse: []}});
 };
 
+const sayCard = async (i: ChatInputCommandInteraction, components: CardComponents): Promise<void> => {
+  await i.editReply({components, flags: MessageFlags.IsComponentsV2, allowedMentions: {parse: []}});
+};
+
 const guildOnly = async (i: ChatInputCommandInteraction): Promise<boolean> => {
   if (i.inGuild()) return true;
   await i.reply({content: SERVER_ONLY, flags: MessageFlags.Ephemeral});
   return false;
 };
 
-/** The caller's own linked session when its vault is already in memory (no loading, no network). */
 const ownInMemory = (i: ChatInputCommandInteraction): VaultSession | null => {
   const s = peekSession(i.user.id);
   return s?.isLinked() && s.isLoaded() ? s : null;
 };
 
-/** Whether the session holds these vault keys in memory (every one the cloud has has been pulled). */
 const holds = (s: VaultSession, keys: string[]): boolean => {
   const known = s.platform.link()?.known || {};
   return keys.every(k => s.platform.get(k) !== undefined || !known[k]);
@@ -112,10 +105,6 @@ interface Target {
   own: boolean;
 }
 
-/**
- * The linked, freshened session of `user` (checked first when the last check is older than
- * `maxAgeMs`, by default 30 s). Null after telling the caller why not.
- */
 const targetOf = async (i: ChatInputCommandInteraction, user: User, maxAgeMs?: number): Promise<Target | null> => {
   const own = user.id === i.user.id;
   let session: VaultSession | null;
@@ -138,6 +127,10 @@ const targetOf = async (i: ChatInputCommandInteraction, user: User, maxAgeMs?: n
     await say(i, {content: broken && own ? `❌ ${LINK_BROKEN_TEXT}` : NOT_LOADED});
     return null;
   }
+  if (!session.hasData()) {
+    await say(i, {content: own ? NO_DATA_TEXT : 'That vault has no data yet.'});
+    return null;
+  }
   if (!holds(session, [VAULT_KEYS.members, VAULT_KEYS.front, VAULT_KEYS.history, VAULT_KEYS.system])) {
     await say(i, {content: NOT_LOADED});
     return null;
@@ -147,10 +140,6 @@ const targetOf = async (i: ChatInputCommandInteraction, user: User, maxAgeMs?: n
 
 const KEEPS_TRYING = 'Plural Starbot keeps trying; if the bot restarts before it gets through, the change is lost.';
 
-/**
- * What the reply says above the front when the change did not fully reach the vault. The vault
- * settles ps:front and ps:history each on its own, so another device's change can win one of them.
- */
 const pushProblem = (r: PushResult): string | null => {
   if (r.ok) return null;
   if (r.reason === 'conflict') {
@@ -172,7 +161,6 @@ const pushProblem = (r: PushResult): string | null => {
   return `⚠️ The front changed here, but it is not saved to your vault yet (${why}). ${KEEPS_TRYING}`;
 };
 
-/** Mention names in descriptions: members the reader may see; anyone else keeps the name stored in the text. */
 const mentionNames = (members: Member[], showPrivate: boolean): MentionNames => {
   const byId = new Map(visibleMembers(members, showPrivate).map(m => [m.id, m] as const));
   return id => {
@@ -186,7 +174,6 @@ const noMember = (name: string): string => `No member named ${bold(name)}.`;
 const ambiguous = (name: string, count: number, prefix: boolean): string =>
   prefix ? `${count} members start with ${bold(name)}. Type more of the name.` : `${count} members are called ${bold(name)}.`;
 
-/** ps:front as the app reads it; undefined when it holds something unreadable. */
 const currentFront = (s: VaultSession): FrontState | null | undefined => {
   const raw = s.platform.get(VAULT_KEYS.front);
   if (raw === undefined) return null;
@@ -203,15 +190,12 @@ const safeParse = (raw: string): unknown => {
   }
 };
 
-// ---- /member -------------------------------------------------------------------------
-
 export const handleMember = async (i: ChatInputCommandInteraction): Promise<void> => {
   if (!(await guildOnly(i))) return;
   const query = i.options.getString('name', true);
   const user = i.options.getUser('user') ?? i.user;
   const own = user.id === i.user.id;
   const pre = own ? ownInMemory(i) : null;
-  // Own vault: the answer goes to the caller only when any member the name matches is private.
   const onlyCaller = own && (!pre || nameCandidates(visibleMembers(pre.members(), true), query).some(m => m.private === true));
   await defer(i, onlyCaller);
 
@@ -219,7 +203,6 @@ export const handleMember = async (i: ChatInputCommandInteraction): Promise<void
   if (!t) return;
   const showPrivate = t.own && onlyCaller;
   const all = t.session.members();
-  // Someone else's private member gets the same answer as a name that does not exist.
   const found = findByName(visibleMembers(all, showPrivate), query);
   if (found.kind === 'none') {
     await say(i, {content: noMember(query)});
@@ -230,7 +213,7 @@ export const handleMember = async (i: ChatInputCommandInteraction): Promise<void
     return;
   }
   const m = found.member;
-  const embeds = memberCard({
+  const components = memberCard({
     member: m,
     groups: t.session.groups(),
     fieldDefs: t.session.customFieldDefs(),
@@ -238,11 +221,76 @@ export const handleMember = async (i: ChatInputCommandInteraction): Promise<void
     avatarUrl: avatarUrlFor(t.session, MEDIA_KEYS.memberAvatar(m.id)),
     bannerUrl: avatarUrlFor(t.session, MEDIA_KEYS.memberBanner(m.id)),
     ownerView: t.own,
+    nav: {ownerId: t.user.id, privateView: showPrivate},
   });
-  await say(i, {embeds});
+  await sayCard(i, components);
 };
 
-// ---- /system -------------------------------------------------------------------------
+const BUTTON_WAIT_MS = 1500;
+
+const settlesWithin = (p: Promise<unknown>, ms: number): Promise<boolean> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<boolean>(resolve => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  return Promise.race([p.then(() => true, () => true), late]).finally(() => clearTimeout(timer));
+};
+
+const readVault = async (userId: string): Promise<VaultSession | null> => {
+  const session = await linkedSession(userId);
+  if (session) await session.freshen();
+  return session;
+};
+
+export const handleMemberPage = async (i: ButtonInteraction): Promise<void> => {
+  const ref = parseMemberPageId(i.customId);
+  if (!ref) {
+    await i.reply({content: GONE, flags: MessageFlags.Ephemeral});
+    return;
+  }
+  const reading = readVault(ref.ownerId);
+  if (!(await settlesWithin(reading, BUTTON_WAIT_MS))) await i.deferUpdate();
+  const tell = (content: string): Promise<unknown> =>
+    i.deferred ? i.followUp({content, flags: MessageFlags.Ephemeral}) : i.reply({content, flags: MessageFlags.Ephemeral});
+  const own = i.user.id === ref.ownerId;
+  let session: VaultSession | null;
+  try {
+    session = await reading;
+  } catch (e) {
+    const broken = e instanceof CloudError && e.code === 'link broken';
+    if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', ref.ownerId);
+    await tell(broken && own ? `❌ ${LINK_BROKEN_TEXT}` : NOT_LOADED);
+    return;
+  }
+  if (!session) {
+    await tell(GONE);
+    return;
+  }
+  if (!holds(session, [VAULT_KEYS.members, VAULT_KEYS.front, VAULT_KEYS.history, VAULT_KEYS.system])) {
+    await tell(NOT_LOADED);
+    return;
+  }
+  const showPrivate = own && ref.privateView;
+  const all = session.members();
+  const m = visibleMembers(all, showPrivate).find(x => x.id === ref.memberId);
+  if (!m) {
+    await tell(GONE);
+    return;
+  }
+  const components = memberCard({
+    member: m,
+    groups: session.groups(),
+    fieldDefs: session.customFieldDefs(),
+    names: mentionNames(all, showPrivate),
+    avatarUrl: avatarUrlFor(session, MEDIA_KEYS.memberAvatar(m.id)),
+    bannerUrl: avatarUrlFor(session, MEDIA_KEYS.memberBanner(m.id)),
+    ownerView: ref.ownerView,
+    page: ref.page,
+    nav: {ownerId: ref.ownerId, privateView: ref.privateView},
+  });
+  if (i.deferred) await i.editReply({components, flags: MessageFlags.IsComponentsV2, allowedMentions: {parse: []}});
+  else await i.update({components, flags: MessageFlags.IsComponentsV2, allowedMentions: {parse: []}});
+};
 
 export const handleSystem = async (i: ChatInputCommandInteraction): Promise<void> => {
   if (!(await guildOnly(i))) return;
@@ -251,7 +299,7 @@ export const handleSystem = async (i: ChatInputCommandInteraction): Promise<void
   const t = await targetOf(i, user);
   if (!t) return;
   const members = t.session.members();
-  const embeds = systemCard({
+  const components = systemCard({
     system: t.session.system(),
     members,
     discordUserId: t.user.id,
@@ -259,10 +307,8 @@ export const handleSystem = async (i: ChatInputCommandInteraction): Promise<void
     avatarUrl: avatarUrlFor(t.session, MEDIA_KEYS.systemAvatar),
     bannerUrl: avatarUrlFor(t.session, MEDIA_KEYS.systemBanner),
   });
-  await say(i, {embeds});
+  await sayCard(i, components);
 };
-
-// ---- /front --------------------------------------------------------------------------
 
 const showFront = async (i: ChatInputCommandInteraction, t: Target, showPrivate: boolean, note: string | null = null): Promise<void> => {
   const view = frontView({
@@ -299,10 +345,6 @@ const namesOf = (i: ChatInputCommandInteraction, sub: string): string[] => {
   return list.map(n => n.trim()).filter(Boolean);
 };
 
-/**
- * Whether the reply to this change could name a private member, or count one among the members a name
- * matches (from the vault in memory; errs towards private).
- */
 const changeShowsPrivate = (s: VaultSession, sub: string, names: string[]): boolean => {
   if (sub === 'clear') return false;
   const pool = s.members().filter(isShown);
@@ -317,7 +359,6 @@ const changeFront = async (i: ChatInputCommandInteraction, sub: string): Promise
   const pre = ownInMemory(i);
   const onlyCaller = !pre || changeShowsPrivate(pre, sub, names);
   await defer(i, onlyCaller);
-  // Check the vault right before changing it, so the change starts from what other devices wrote last.
   const t = await targetOf(i, i.user, 0);
   if (!t) return;
   const s = t.session;

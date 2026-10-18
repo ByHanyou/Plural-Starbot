@@ -3,9 +3,6 @@ setlocal
 cd /d "%~dp0"
 title Plural Starbot
 
-REM Starts Plural Starbot (Node.js): installs dependencies once, builds when needed, runs it.
-
-REM --- Find Node.js and npm ---
 where node >nul 2>nul
 if errorlevel 1 (
     echo.
@@ -26,7 +23,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM --- Install dependencies the first time ---
 if not exist "node_modules\" (
     echo Installing dependencies ^(only takes a moment the first time^)...
     call npm install
@@ -38,7 +34,6 @@ if not exist "node_modules\" (
     )
 )
 
-REM --- Build when dist is missing or older than src ---
 node -e "const fs=require('fs'),path=require('path');const out='dist/index.js';if(!fs.existsSync(out))process.exit(1);const built=fs.statSync(out).mtimeMs;const newer=d=>fs.readdirSync(d,{withFileTypes:true}).some(e=>{const f=path.join(d,e.name);return e.isDirectory()?newer(f):fs.statSync(f).mtimeMs>built;});process.exit(newer('src')?1:0);"
 if errorlevel 1 (
     echo Building the bot ^(only needed after an update^)...

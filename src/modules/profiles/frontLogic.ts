@@ -1,16 +1,9 @@
-// Front logic ported from the Plural Star app. Pure: no Discord, database or session imports.
-// Sources: src/store/actions.ts (updateFront, quickAddToFront, removeFromFront), src/utils.ts
-// (withMemberSince, frontSessionStart, frontToHistoryEntry, migrateFrontState, fmtDur, orderFronters,
-// translateMood, mood lists) and src/modals/SetFrontModal.tsx (how Set Front builds its tiers).
 import type {FrontSortMode, FrontState, FrontTier, FrontTierKey, HistoryChangeType, HistoryEntry} from '../../vault/types';
 
-/** The app's tier order. */
 export const TIER_ORDER: readonly FrontTierKey[] = ['primary', 'coFront', 'coConscious'];
 
-/** The app's EMPTY_TIER. */
 export const emptyTier = (): FrontTier => ({memberIds: [], note: ''});
 
-/** The app's migrateFrontState: a stored ps:front, upgrading the old single-tier shape. */
 export const migrateFrontState = (raw: any): FrontState | null => {
   if (!raw) return null;
   if (raw.primary) return raw as FrontState;
@@ -22,10 +15,6 @@ export const migrateFrontState = (raw: any): FrontState | null => {
   };
 };
 
-/**
- * ps:front as the app holds it in memory (migrateFrontState). A tier that is missing or has no
- * memberIds array (which would crash the app) is read as empty; well-formed tiers are left as they are.
- */
 export const readFront = (raw: unknown): FrontState | null => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const f = migrateFrontState(raw);
@@ -57,7 +46,6 @@ export const withMemberSince = (next: FrontState | null, prev: FrontState | null
   return {...next, memberSince: since};
 };
 
-/** When the current front session started: the earliest memberSince in the first non-empty tier (optionally only counting some members). */
 export const frontSessionStart = (f: FrontState, include?: (id: string) => boolean): number => {
   const any = f as any;
   const since: Record<string, number> = any?.memberSince || {};
@@ -99,17 +87,11 @@ export const frontToHistoryEntry = (f: FrontState, endTime: number | null, chang
   changeTier,
 });
 
-/** The values updateFront writes: ps:front (null when nobody fronts) and the whole ps:history. */
 export interface FrontWrite {
   front: FrontState | null;
   history: HistoryEntry[];
 }
 
-/**
- * The app's updateFront, without the noteboard alert, GPS and last-location tail.
- * Takes the current front and history (the app's store state) and returns what the app writes
- * to KEYS.front and (through saveHistory) KEYS.history.
- */
 export const updateFront = (
   front: FrontState | null,
   history: HistoryEntry[],
@@ -185,8 +167,6 @@ export const updateFront = (
   return {front: finalFront, history: newHistory};
 };
 
-// ---- building the three tiers for a change ------------------------------------
-
 export type FrontTiers = Record<FrontTierKey, FrontTier>;
 
 const MOOD_DELIMITER = ', ';
@@ -195,15 +175,8 @@ export const parseMoodList = (mood: string | undefined): string[] =>
 export const serializeMoodList = (moods: string[]): string =>
   moods.filter(Boolean).map(s => s.trim()).filter(Boolean).join(MOOD_DELIMITER);
 
-/** SetFrontModal's resolveMood with no custom mood typed in. */
 const resolveMood = (mood: string): string | undefined => serializeMoodList(parseMoodList(mood)) || undefined;
 
-/**
- * Set Front (SetFrontModal): tiers seeded from the current front (each member in one tier only), like the
- * app's checkboxes start ticked; `ids` are ticked in the chosen tier (leaving the other tiers) and everyone
- * already in it stays, so their fronting times carry on. Saved the way handleSave does.
- * GPS seeding of the primary location is not part of the bot.
- */
 export const setFrontTiers = (current: FrontState | null, tier: FrontTierKey, ids: string[]): FrontTiers => {
   const c = current;
   const seedP = new Set<string>(c?.primary?.memberIds || []);
@@ -231,7 +204,6 @@ export const setFrontTiers = (current: FrontState | null, tier: FrontTierKey, id
   return {primary: build('primary'), coFront: build('coFront'), coConscious: build('coConscious')};
 };
 
-/** The app's quickAddToFront: the member leaves every tier and is appended to `tierKey`. */
 export const quickAddTiers = (front: FrontState | null, id: string, tierKey: FrontTierKey): FrontTiers => {
   const strip = (tier: FrontTier): FrontTier => ({...tier, memberIds: tier.memberIds.filter(x => x !== id)});
   const tiers: FrontTiers = {
@@ -243,7 +215,6 @@ export const quickAddTiers = (front: FrontState | null, id: string, tierKey: Fro
   return tiers;
 };
 
-/** The app's removeFromFront: the member leaves every tier. Null when there is no front (the app does nothing). */
 export const removeTiers = (front: FrontState | null, id: string): FrontTiers | null => {
   if (!front) return null;
   return {
@@ -253,12 +224,8 @@ export const removeTiers = (front: FrontState | null, id: string): FrontTiers | 
   };
 };
 
-/** Clear in SetFrontModal: every tier EMPTY_TIER. */
 export const clearTiers = (): FrontTiers => ({primary: emptyTier(), coFront: emptyTier(), coConscious: emptyTier()});
 
-// ---- display ----------------------------------------------------------------
-
-/** The app's fmtDur with its English strings ("Xd Yh", "Xh Ym", "Xm", "<1m"). */
 export const fmtDur = (start: number, end?: number | null): string => {
   const ms = (end ?? Date.now()) - start;
   const h = Math.floor(ms / 3600000);
@@ -269,13 +236,11 @@ export const fmtDur = (start: number, end?: number | null): string => {
 };
 
 let collator: Intl.Collator | null = null;
-/** The app's nameCompare, in the English locale. */
 export const nameCompare = (a: unknown, b: unknown): number => {
   if (!collator) collator = new Intl.Collator('en-US');
   return collator.compare(String(a ?? ''), String(b ?? ''));
 };
 
-/** The app's orderFronters (how the Front tab orders members inside a tier). */
 export const orderFronters = (ids: string[], mode: FrontSortMode | undefined, nameOf: (id: string) => string, custom?: string[]): string[] => {
   if (mode === 'az') return [...ids].sort((a, b) => nameCompare(nameOf(a), nameOf(b)));
   if (mode === 'za') return [...ids].sort((a, b) => nameCompare(nameOf(b), nameOf(a)));
@@ -291,7 +256,6 @@ export const orderFronters = (ids: string[], mode: FrontSortMode | undefined, na
 
 const DEFAULT_MOODS = ['Calm', 'Happy', 'Anxious', 'Tired', 'Energetic', 'Dissociated', 'Grounded', 'Irritable', 'Sad', 'Focused'];
 
-/** The app's translateMood in English: built-in moods in their canonical spelling, joined with ", ". */
 export const translateMood = (mood: string): string => {
   if (!mood) return '';
   const parts = mood.split(',').map(s => s.trim()).filter(Boolean);
@@ -305,7 +269,6 @@ const DEFAULT_TIER_NAMES: Record<FrontTierKey, string> = {
   coConscious: 'Co-Conscious',
 };
 
-/** A tier's name as the app shows it: the system's own name from ps:settings.tierNames, else the default. */
 export const tierName = (key: FrontTierKey, tierNames?: Record<string, string> | null): string => {
   const own = tierNames && typeof tierNames[key] === 'string' ? tierNames[key].trim() : '';
   return own || DEFAULT_TIER_NAMES[key];

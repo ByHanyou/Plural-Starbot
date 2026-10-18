@@ -5,5 +5,4 @@ import profiles from './profiles/index';
 import proxy from './proxy/index';
 import type {BotModule} from './types';
 
-/** Every module, in dispatch order. */
 export const modules: BotModule[] = [help, link, health, proxy, profiles];

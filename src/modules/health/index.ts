@@ -1,10 +1,3 @@
-// Health reminders, ported from the Python bot (bot.py). On a schedule each
-// server sets, the bot pings the roles it chose with a warm nudge about
-// eating, drinking, taking meds, moving, resting your eyes, hygiene or
-// kindness, plus a related fact. Everything is configured with /health
-// (Manage Server). Settings and the no-repeat content memory are kept per
-// guild in SQLite.
-
 import {
   ChannelType,
   ChatInputCommandInteraction,
@@ -39,13 +32,10 @@ import {
 import {dropSettings, getSettings, guildsWithStoredSettings, HealthGroup, HealthSettings, saveSettings} from './settings';
 import {isValidZone, wallAt} from './zones';
 
-// ---- Message building ---------------------------------------------------------
-
 const hasKey = <T>(o: Readonly<Record<string, T>>, k: string): boolean => Object.hasOwn(o, k);
 
 const keyError = (k: string): Error => new Error(`KeyError: '${k}'`);
 
-/** random.choices(topics, weights=[len(FACTS[t]) for t in topics], k=1)[0] */
 const weightedTopic = (topics: string[]): string => {
   const cum: number[] = [];
   let total = 0;
@@ -61,10 +51,6 @@ const weightedTopic = (topics: string[]): string => {
   return topics[i];
 };
 
-/**
- * One reminder line per reminder_topic (in order), then one fact dealt from the
- * group's fact_topics. Everything comes off the guild's no-repeat decks.
- */
 const buildEmbed = (guildId: string, group: HealthGroup): EmbedBuilder => {
   const content = contentFor(guildId);
   const reminderLines: string[] = [];
@@ -74,8 +60,6 @@ const buildEmbed = (guildId: string, group: HealthGroup): EmbedBuilder => {
     reminderLines.push(`${TOPIC_META[topic].emoji} ${content.nudgeDecks[topic].draw()}`);
   }
 
-  // Weighting by pool size keeps every individual fact equally likely even if
-  // one topic's list is longer than another's.
   const factTopic = weightedTopic(group.fact_topics);
   if (!hasKey(content.factDecks, factTopic)) throw keyError(factTopic);
   const fact = content.factDecks[factTopic].draw();
@@ -88,7 +72,6 @@ const buildEmbed = (guildId: string, group: HealthGroup): EmbedBuilder => {
     .addFields({name: `💡 ${factMeta.kicker}`, value: fact, inline: false});
 };
 
-// Allow role pings, but never let the bot ping @everyone or individual users.
 const ALLOWED = {parse: ['roles' as const]};
 const QUIET = {parse: []};
 
@@ -113,15 +96,8 @@ const guildLabel = (client: Client, guildId: string): string => client.guilds.ca
 
 const channelLabel = (channel: SendableChannels): string => ('name' in channel && channel.name ? channel.name : channel.id);
 
-// Groups already warned about in this process, so the console gets one loud
-// line per group instead of one per firing.
 const warnedRoleless = new Set<string>();
 
-/**
- * Send one message per configured group (a group with no role is skipped).
- * `only` limits the round to the named groups; null means all of them, which is
- * what /health test wants.
- */
 const sendRound = async (client: Client, guildId: string, channel: SendableChannels, only: string[] | null): Promise<number> => {
   const s = getSettings(guildId);
   const where = guildLabel(client, guildId);
@@ -130,8 +106,6 @@ const sendRound = async (client: Client, guildId: string, channel: SendableChann
   for (const [name, group] of Object.entries(s.groups)) {
     if (only !== null && !only.includes(name)) continue;
     if (!group.role_id) {
-      // A scheduled group with no role would otherwise vanish without a trace;
-      // say it once.
       if (only !== null) {
         skippedRoleless.push(name);
         const warnKey = `${guildId}\u0000${name}`;
@@ -156,37 +130,26 @@ const sendRound = async (client: Client, guildId: string, channel: SendableChann
     }
   }
   if (skippedRoleless.length) log.info('[%s] Skipped this round (no role): %s', where, skippedRoleless.join(', '));
-  // One write per round covers every line dealt above.
   contentFor(guildId).memory.save();
   return sent;
 };
 
-// ---- The scheduled loop (one per guild) -------------------------------------------
-
-/** What happens at each wake: bot.py's reminder_loop body. */
 const reminderTick = async (client: Client, guildId: string): Promise<void> => {
   const s = getSettings(guildId);
   if (!s.enabled) return;
   const where = guildLabel(client, guildId);
   const channel = await getChannelOrNone(client, s);
   if (!channel) {
-    log.warn('[%s] No channel set yet — use /health channel. Skipping this round.', where);
+    log.warn('[%s] No channel set yet. Use /health channel. Skipping this round.', where);
     return;
   }
   const now = wallAt(s.timezone, Date.now());
   const due = dueGroupNames(s, now);
-  // One honest line per wake, so the console proves the loop fired even when
-  // every due group ends up skipped.
   log.info('[%s] Woke at %s (%s); due: %s', where, formatClock(now), s.timezone, due.length ? due.join(', ') : 'nobody');
   if (!due.length) return;
   await sendRound(client, guildId, channel, due);
 };
 
-/**
- * A guild's reminder loop: discord.py's tasks.loop(time=compute_times(settings)).
- * It sleeps until the next wake time, runs the body, and repeats. restart()
- * picks up a changed schedule.
- */
 class ReminderLoop {
   private timer: NodeJS.Timeout | null = null;
   private generation = 0;
@@ -242,11 +205,9 @@ class ReminderLoop {
   private async wake(gen: number, times: ClockTime[], zone: string, target: number): Promise<void> {
     if (gen !== this.generation) return;
     if (Date.now() < target) {
-      // Woke a little early; sleep the rest.
       this.arm(gen, times, zone, target);
       return;
     }
-    // The next iteration always follows this one (discord.py's clock-drift guard).
     let next: number;
     try {
       next = nextFireTime(times, zone, Math.max(Date.now(), target + 1));
@@ -266,7 +227,6 @@ class ReminderLoop {
 
 const loops = new Map<string, ReminderLoop>();
 
-/** Starts the guild's loop if it is not running yet (the Python loop always ran). */
 const ensureLoop = (client: Client, guildId: string): void => {
   let loop = loops.get(guildId);
   if (!loop) {
@@ -276,7 +236,6 @@ const ensureLoop = (client: Client, guildId: string): void => {
   if (!loop.running) loop.start();
 };
 
-/** Apply a changed start time / interval / timezone to the running loop. */
 const reschedule = (client: Client, guildId: string): void => {
   const loop = loops.get(guildId);
   if (loop?.running) loop.restart();
@@ -287,8 +246,6 @@ const stopLoop = (guildId: string): void => {
   loops.get(guildId)?.stop();
   loops.delete(guildId);
 };
-
-// ---- /health slash commands (Manage Server) ---------------------------------------
 
 const GROUP_CHOICES = [
   {name: 'Nutrition (food + water)', value: 'Nutrition'},
@@ -369,7 +326,7 @@ const hasOwnSchedule = (g: HealthGroup): boolean => !!(g.start_time || g.interva
 
 const healthShow = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
   const s = getSettings(guildId);
-  const channel = s.channel_id ? `<#${s.channel_id}>` : '*not set — use /health channel*';
+  const channel = s.channel_id ? `<#${s.channel_id}>` : '*not set, use /health channel*';
   const lines = [
     '**Health reminder settings**',
     `• Channel: ${channel}`,
@@ -378,7 +335,7 @@ const healthShow = async (i: ChatInputCommandInteraction, guildId: string): Prom
     `• Status: ${s.enabled ? '🟢 on' : '🔴 paused'}`,
   ];
   for (const [name, g] of Object.entries(s.groups)) {
-    const role = g.role_id ? `<@&${g.role_id}>` : '*not set — use /health role*';
+    const role = g.role_id ? `<@&${g.role_id}>` : '*not set, use /health role*';
     let sched = '';
     if (hasOwnSchedule(g)) {
       const [st, iv] = groupSchedule(s, g);
@@ -471,8 +428,6 @@ const healthGroupSchedule = async (i: ChatInputCommandInteraction, guildId: stri
     return;
   }
 
-  // Validate everything BEFORE touching settings, so a bad half can't leave a
-  // half-applied schedule behind.
   let newTime: string | null = null;
   if (time !== null) {
     newTime = parseStartTime(time);
@@ -555,8 +510,6 @@ const HANDLERS: Record<string, (i: ChatInputCommandInteraction, guildId: string)
   disable: healthDisable,
   test: healthTest,
 };
-
-// ---- Module ---------------------------------------------------------------------
 
 const health: BotModule = {
   name: 'health',

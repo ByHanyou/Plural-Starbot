@@ -1,17 +1,13 @@
-// /proxylog: every proxied message is copied to the guild's log channel in PluralKit's log shape.
 import {EmbedBuilder, Guild, Message, User} from 'discord.js';
 import {ellipsize, logFooter, logSender} from './text';
 import {getLogChannel} from './settings';
 import {warnHourly} from './warn';
 
 export interface ProxyLogEntry {
-  /** The webhook message the bot posted. */
   sent: Message<true>;
   originalId: string;
   sender: User;
-  /** Name of the channel (or thread) the message was sent in. */
   channelName: string;
-  /** The member's name as shown on the proxied message. */
   shownName: string;
   avatarUrl?: string;
   content: string;
@@ -45,7 +41,6 @@ export const buildLogEmbed = (e: ProxyLogEntry): EmbedBuilder => {
   return embed;
 };
 
-/** Posts the log entry when the guild has a log channel. Failures are logged (hourly per channel), never thrown. */
 export const postProxyLog = async (guild: Guild, entry: ProxyLogEntry): Promise<void> => {
   const channelId = getLogChannel(guild.id);
   if (!channelId) return;

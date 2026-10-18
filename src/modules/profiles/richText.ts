@@ -1,16 +1,10 @@
-// Descriptions as Discord markdown. Pure: no Discord imports.
-// A description is HTML (the app's rich text editor) or markdown (older text, imports); the app tells
-// them apart with isHTML (src/components/MarkdownRenderer.tsx), and so does this file.
-
 import {truncateUnits} from '../proxy/text';
 
-/** Resolves a member id from a description mention to the name to show, or undefined to keep the stored one. */
 export type MentionNames = (memberId: string) => string | undefined;
 
 const MENTION_RE = /@\[([^\]]+)\]\(member:([a-zA-Z0-9_-]+)\)/g;
 const URL_RE = /https?:\/\/[^\s<]+/g;
 
-/** The app's isHTML. */
 export const isHTML = (text: string): boolean => {
   const t = text.trim();
   if (/^<(?:img|br)\b/i.test(t)) {
@@ -34,10 +28,6 @@ const decodeEntities = (s: string): string =>
 
 const escapeRun = (s: string): string => s.replace(/[\\*_~`[\]<>#-]/g, '\\$&').replace(/(\d)\.(?=\s|$)/g, '$1\\.');
 
-/**
- * Escapes Discord markdown in plain text so it shows literally (as the app shows it).
- * URLs are left alone so Discord still links them; "||spoiler||" is left working, as in the app.
- */
 export const escapeText = (s: string): string => {
   let out = '';
   let last = 0;
@@ -49,7 +39,6 @@ export const escapeText = (s: string): string => {
   return out + escapeRun(s.slice(last));
 };
 
-/** "@[Name](member:id)" -> "@Name" (the member's current name when known, as the app shows it). Other text through `plain`. */
 const withMentions = (text: string, names: MentionNames | undefined, plain: (s: string) => string): string => {
   let out = '';
   let last = 0;
@@ -61,8 +50,6 @@ const withMentions = (text: string, names: MentionNames | undefined, plain: (s: 
   }
   return out + plain(text.slice(last));
 };
-
-// ---- HTML ---------------------------------------------------------------------
 
 interface El {
   tag: string;
@@ -76,7 +63,6 @@ const DROP = new Set(['script', 'style', 'head', 'title', 'template']);
 const BLOCK = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'ul', 'ol', 'li', 'hr', 'table', 'tr', 'section', 'article', 'header', 'footer']);
 const MARK: Record<string, string> = {b: '**', strong: '**', i: '*', em: '*', u: '__', ins: '__', s: '~~', strike: '~~', del: '~~'};
 
-/** A tolerant tag tree: stray closing tags are ignored, unclosed tags close at the end. */
 const parseHtml = (html: string): El => {
   const root: El = {tag: '#root', attrs: '', children: []};
   const stack: El[] = [root];
@@ -106,7 +92,6 @@ const parseHtml = (html: string): El => {
   return root;
 };
 
-/** Soft break: a block boundary. Runs of soft breaks and hard line breaks are resolved in finish(). */
 const SOFT = String.fromCharCode(0);
 const BREAKS = new RegExp(`[${SOFT}\\n]+`, 'g');
 const EDGE_BREAKS = new RegExp(`^[${SOFT}\\n]+|[${SOFT}\\n]+$`, 'g');
@@ -121,7 +106,6 @@ const attr = (attrs: string, name: string): string => {
   return decodeEntities(m ? (m[1] ?? m[2] ?? m[3] ?? '') : '').trim();
 };
 
-/** Puts `mark` around each line's text, keeping surrounding whitespace outside (Discord ignores "** x**"). */
 const wrapLines = (s: string, mark: string): string =>
   s.replace(/[^\n\u0000]+/g, piece => {
     const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(piece)!;
@@ -170,7 +154,6 @@ const renderNode = (node: Node, ctx: Ctx): string => {
   return renderChildren(node, ctx);
 };
 
-/** Resolves break runs: hard breaks count, block boundaries add one line; at most one blank line in a row. */
 const finish = (s: string): string =>
   s
     .replace(EDGE_BREAKS, '')
@@ -185,13 +168,9 @@ const finish = (s: string): string =>
     .join('\n')
     .trim();
 
-/** HTML from the rich text editor as Discord markdown: bold, italic, underline, strike, links, line breaks and lists; other tags dropped. */
 export const htmlToMarkdown = (html: string, names?: MentionNames): string =>
   finish(renderNode(parseHtml(html.replace(/[\r\n]/g, '')), {names, lists: []}));
 
-// ---- markdown -------------------------------------------------------------------
-
-/** The app's markdown is close to Discord's: mentions become names, images are dropped, the rest is kept. */
 export const markdownToDiscord = (text: string, names?: MentionNames): string =>
   withMentions(
     text
@@ -208,13 +187,11 @@ export const markdownToDiscord = (text: string, names?: MentionNames): string =>
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-/** A description (HTML or markdown) as Discord markdown. */
 export const descriptionToDiscord = (text: unknown, names?: MentionNames): string => {
   if (typeof text !== 'string' || !text.trim()) return '';
   return isHTML(text) ? htmlToMarkdown(text, names) : markdownToDiscord(text, names);
 };
 
-/** At most `max` characters, ending in "…" when cut. */
 export const capText = (s: string, max: number): string => {
   if (s.length <= max) return s;
   return truncateUnits(s, max - 1).trimEnd() + '…';

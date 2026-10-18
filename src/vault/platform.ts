@@ -1,10 +1,9 @@
 import {EventEmitter} from 'node:events';
+import * as nodeCrypto from 'node:crypto';
 import type {CloudPlatform} from '../cloud/cloudVault';
 import type {CloudLinkState, CloudTransport} from '../cloud/cloudTypes';
 import {fetchTransport} from './transport';
 
-// The app's sync hash (src/network/NetworkManager.ts: contentHash, canonicalForSync, syncHash),
-// copied verbatim so the bot's manifest hashes match the phone's.
 const contentHash = (s: string): string => {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -21,7 +20,6 @@ const canonicalForSync = (s: string): string =>
 
 export const syncHash = (s: string): string => contentHash(canonicalForSync(s));
 
-/** Where the platform keeps the link state (SQLite in the bot, swappable in tests). */
 export interface LinkStore {
   load(userId: string): CloudLinkState | null;
   save(userId: string, state: CloudLinkState | null): void;
@@ -34,14 +32,10 @@ export interface MemoryPlatformOptions {
   transport?: CloudTransport;
 }
 
-/**
- * CloudPlatform for one Discord user. Vault contents live only in this in-memory map;
- * only the link state is persisted (through LinkStore). Emits 'applied' (keys: string[])
- * whenever the map changes: after the engine's apply() or remove(), and after a local write.
- */
 export class MemoryPlatform extends EventEmitter implements CloudPlatform {
   readonly transport: CloudTransport;
   readonly userId: string;
+  readonly skipMediaReupload = true;
   private readonly cloudNodeUrl: string;
   private readonly links: LinkStore;
   private readonly data = new Map<string, string>();
@@ -73,17 +67,15 @@ export class MemoryPlatform extends EventEmitter implements CloudPlatform {
     if (this.data.delete(key)) this.emit('applied', [key]);
   }
 
-  // The bot never takes over the user's network identity or friends.
   async adoptIdentity(_identityRaw: string, _friendsRaw: string | null): Promise<void> {}
 
   async mergeFriends(_friendsRaw: string | null, _tombstonesRaw: string | null): Promise<void> {}
 
-  // The bot never uploads images, so nothing is re-encoded.
-  async reencodeImage(dataUri: string): Promise<string> {
+  async reencodeImage(dataUri: string, _key: string): Promise<string> {
     return dataUri;
   }
 
-  localHash(raw: string): string {
+  async localHash(raw: string): Promise<string> {
     return syncHash(raw);
   }
 
@@ -110,26 +102,30 @@ export class MemoryPlatform extends EventEmitter implements CloudPlatform {
     return Date.now();
   }
 
-  // ---- bot-side helpers ----------------------------------------------------
+  argon2id(password: string, salt: Uint8Array): Promise<Uint8Array> {
+    return new Promise((resolve, reject) => {
+      nodeCrypto.argon2(
+        'argon2id',
+        {message: Buffer.from(password, 'utf8'), nonce: salt, parallelism: 1, tagLength: 32, memory: 65536, passes: 3},
+        (err, key) => (err ? reject(err) : resolve(key)),
+      );
+    });
+  }
 
-  /** Raw stored value of a vault key, if held in memory. */
   get(key: string): string | undefined {
     return this.data.get(key);
   }
 
-  /** Writes values into memory as a local change (the session pushes them). */
   setLocal(keys: Record<string, string>): void {
     const changed = Object.keys(keys);
     for (const k of changed) this.data.set(k, keys[k]);
     if (changed.length) this.emit('applied', changed);
   }
 
-  /** The current link state as last loaded or saved by the engine (live object). */
   link(): CloudLinkState | null {
     return this.linkState;
   }
 
-  /** Drops every vault value held in memory. */
   clear(): void {
     if (!this.data.size) return;
     const keys = [...this.data.keys()];

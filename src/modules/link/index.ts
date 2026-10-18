@@ -17,7 +17,7 @@ import {
 import {CloudError} from '../../cloud/cloudTypes';
 import {log} from '../../log';
 import {dropSession, getSession, hasStoredLink, peekSession} from '../../vault/registry';
-import {LINK_BROKEN_TEXT, type LinkStage} from '../../vault/session';
+import {LINK_BROKEN_TEXT, NO_DATA_TEXT, type LinkStage} from '../../vault/session';
 import {linkAttempts} from '../../vault/throttle';
 import {forgetNameSettings} from '../proxy/settings';
 import type {BotModule} from '../types';
@@ -27,7 +27,6 @@ const PASSWORD_FIELD = 'password';
 const UNLINK_CONFIRM = 'link:unlink-confirm';
 const UNLINK_CANCEL = 'link:unlink-cancel';
 
-/** True only in the bot's DM (Discord's interaction context; older payloads without one: no guild). */
 const inBotDm = (i: ChatInputCommandInteraction | ModalSubmitInteraction | ButtonInteraction): boolean =>
   i.context !== null && i.context !== undefined ? i.context === InteractionContextType.BotDM : !i.inGuild();
 
@@ -50,13 +49,12 @@ const STAGE_TEXT: Record<LinkStage, string> = {
   queued: '⏳ Other vaults are being linked right now; yours starts in a moment…',
   deriving: '🔑 Deriving your vault key from the password. This takes several seconds…',
   'looking-up': '🔎 Looking for your vault…',
-  opening: '🔐 Vault found. Opening it with your password; this takes several seconds again…',
+  opening: '🔐 Vault found. Opening it with your password…',
   importing: '📥 Reading your vault…',
 };
 
 const systemLabel = (name: string): string => (name.trim() ? `**${name.trim()}**` : 'your system');
 
-/** The reply when a vault is already linked; says so when that link no longer opens the vault. */
 const alreadyLinked = (userId: string, name: string): string =>
   peekSession(userId)?.linkProblem()
     ? `A vault is linked to your Discord account, but ${LINK_BROKEN_TEXT}`
@@ -70,7 +68,6 @@ const minutes = (ms: number): string => {
 const tooManyAttempts = (ms: number): string =>
   `You have tried to link ${linkAttempts.limit} times in the last ${Math.round(linkAttempts.windowMs / 60000)} minutes. Try again in ${minutes(ms)}.`;
 
-/** Error text for the user. Engine errors carry their own wording (e.g. the 'bad password' message). */
 const errorText = (e: unknown): string => {
   if (e instanceof CloudError) {
     if (e.status === 429) {
@@ -152,13 +149,13 @@ const handlePasswordModal = async (i: ModalSubmitInteraction): Promise<void> => 
     log.info('User %s linked a vault (%d member(s)).', i.user.id, result.memberCount);
     await say(
       `✅ Linked to ${systemLabel(result.systemName)} with ${result.memberCount} member${result.memberCount === 1 ? '' : 's'}. ` +
-        'Plural Starbot is now a device on your vault. Use `/unlink` to remove it.',
+        'Plural Starbot is now a device on your vault. Use `/unlink` to remove it.' +
+        (session.hasData() ? '' : ` ${NO_DATA_TEXT}`),
     );
   } catch (e) {
     if (!(e instanceof CloudError)) log.exception(e, 'Linking failed for user %s.', i.user.id);
     await say(`❌ Linking failed: ${errorText(e)}`);
   } finally {
-    // A session that did not end up linked is not kept in memory.
     const s = peekSession(i.user.id);
     if (s && !s.isLinked() && !s.isLinking()) dropSession(i.user.id);
   }

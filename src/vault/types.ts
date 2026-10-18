@@ -1,6 +1,3 @@
-// Vault record shapes, copied from the Plural Star app (src/utils.ts) as plain types.
-// Keep in step with the app; nothing here imports app code.
-
 export interface SystemInfo {
   name: string;
   description: string;
@@ -66,7 +63,6 @@ export interface Member {
   isFacet?: boolean;
   nickname?: string;
   mailboxPassword?: string;
-  pkProxyTags?: {prefix?: string | null; suffix?: string | null}[];
   pkAvatarUrl?: string;
   pkBannerUrl?: string;
   pkKeepProxy?: boolean;
@@ -118,12 +114,10 @@ export type TextScale = 1.0 | 1.25 | 1.5;
 
 export type AccountMode = 'system' | 'singlet';
 
-/** The app's SUPPORTED_LANGUAGES (src/i18n/i18n.ts). */
 export type SupportedLanguage =
   | 'en' | 'es' | 'fr' | 'de' | 'nl' | 'pt' | 'fi' | 'sv' | 'nb' | 'is' | 'it' | 'pl'
   | 'tr' | 'ms' | 'vi' | 'th' | 'hi' | 'af' | 'zh' | 'zhHant' | 'ja' | 'ko' | 'ru' | 'uk';
 
-/** The app's FontChoice (src/theme.ts). */
 export type FontChoice = 'default' | 'opendyslexic' | 'atkinson' | 'lexend' | 'comicneue' | 'cause' | 'gelasio' | 'anton';
 
 export interface AppSettings {
@@ -155,7 +149,6 @@ export interface AppSettings {
   memberListFields?: {groups?: boolean; descriptions?: boolean; pronouns?: boolean; roles?: boolean; count?: boolean; background?: 'plain' | 'color' | 'banner'; browse?: boolean};
 }
 
-/** Vault storage keys, as in the app's KEYS (src/storage.ts). */
 export const VAULT_KEYS = {
   system: 'ps:system',
   members: 'ps:members',
@@ -166,7 +159,6 @@ export const VAULT_KEYS = {
   customFieldDefs: 'ps:customFieldDefs',
 } as const;
 
-/** Media keys (values are data URIs after a pull). */
 export const MEDIA_KEYS = {
   memberAvatar: (memberId: string): string => `ps:media:av:${memberId}`,
   memberBanner: (memberId: string): string => `ps:media:bn:${memberId}`,
@@ -174,6 +166,5 @@ export const MEDIA_KEYS = {
   systemBanner: 'ps:media:sysbn',
 } as const;
 
-/** Keys the avatar server may serve publicly (avatars and banners only). */
 export const isPublicImageKey = (key: string): boolean =>
   key.startsWith('ps:media:av:') || key.startsWith('ps:media:bn:') || key === MEDIA_KEYS.systemAvatar || key === MEDIA_KEYS.systemBanner;

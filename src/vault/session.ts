@@ -1,6 +1,5 @@
 import {EventEmitter} from 'node:events';
 import {CloudApi} from '../cloud/cloudApi';
-import {deriveVaultCredentials} from '../cloud/cloudCrypto';
 import {CloudError, CloudPhase, CloudTransport} from '../cloud/cloudTypes';
 import {CloudService} from '../cloud/cloudVault';
 import {log} from '../log';
@@ -9,9 +8,7 @@ import {linkSlots} from './throttle';
 import {VaultCreateRefused} from './transport';
 import {AppSettings, CustomFieldDef, FrontState, HistoryEntry, Member, MemberGroup, SystemInfo, VAULT_KEYS} from './types';
 
-/** How often a linked session runs the engine's check. */
 export const CHECK_INTERVAL_MS = 2 * 60 * 1000;
-/** freshen() checks again when the last check started longer ago than this. */
 export const FRESH_MS = 30 * 1000;
 const SETTLE_TIMEOUT_MS = 20000;
 
@@ -20,31 +17,25 @@ export type LinkStage = 'queued' | 'deriving' | 'looking-up' | 'opening' | 'impo
 export type LinkResult = {kind: 'not-found'} | {kind: 'linked'; systemName: string; memberCount: number};
 
 export interface UnlinkResult {
-  /** False when removing the device from the vault failed (the link is gone from the bot either way). */
   deviceRemoved: boolean;
   error: string | null;
 }
 
-/** Outcome of writeAndPush(). */
 export type PushResult =
   | {ok: true}
-  /**
-   * Another device had changed some of the written keys (`replaced`); its version of those replaced
-   * the bot's change in memory. The vault resolves each key on its own: `saved` lists the written
-   * keys it now holds as the bot wrote them.
-   */
   | {ok: false; reason: 'conflict'; replaced: string[]; saved: string[]}
-  /** The push failed (error) or had not finished (pending); the change is in memory only and is retried. */
   | {ok: false; reason: 'failed' | 'pending'; error: string | null};
 
-/** Text shown to a user whose stored link no longer opens their vault. */
 export const LINK_BROKEN_TEXT =
   'Plural Starbot can no longer open your vault: it was deleted, or its cloud password was changed. ' +
   'Run `/unlink` and then `/link` again in a direct message with me.';
 
-/** The node says the stored credentials are dead: the vault is gone or its password (and so its auth secret) changed. */
+export const NO_DATA_TEXT = 'Your vault has no data yet. Finish the first backup in the Plural Star app.';
+
 const isDeadLink = (e: unknown): boolean =>
   e instanceof CloudError && ((e.status === 404 && e.code === 'no vault') || (e.status === 401 && e.code === 'bad auth secret'));
+
+const isRemovedDevice = (e: unknown): boolean => e instanceof CloudError && e.status === 401 && e.code === 'device unlinked';
 
 export interface VaultSessionOptions {
   userId: string;
@@ -53,13 +44,8 @@ export interface VaultSessionOptions {
   transport?: CloudTransport;
 }
 
-/** Members shown in the app's Members tab: not deleted, not archived, not custom fronts or facets. */
 const rosterCount = (members: Member[]): number => members.filter(m => !m.deleted && !m.archived && !m.isCustomFront && !m.isFacet).length;
 
-/**
- * One linked (or linkable) Discord user: a CloudService over an in-memory platform.
- * Emits 'applied' (keys: string[]) whenever vault values in memory change.
- */
 export class VaultSession extends EventEmitter {
   readonly userId: string;
   readonly platform: MemoryPlatform;
@@ -70,9 +56,7 @@ export class VaultSession extends EventEmitter {
   private lastCheckAt = 0;
   private linking = false;
   private initPromise: Promise<void> | null = null;
-  /** True once the whole vault is in memory: after a successful check or import. Writes need it. */
   private hydrated = false;
-  /** Set when the node rejected the stored credentials ('no vault' / 'bad auth secret'); checks stop. */
   private broken: string | null = null;
 
   constructor(opts: VaultSessionOptions) {
@@ -85,7 +69,6 @@ export class VaultSession extends EventEmitter {
     this.platform.on('applied', (keys: string[]) => this.emit('applied', keys));
   }
 
-  /** Loads the stored link; when linked, starts the 2-minute check and runs a first check (pulls the vault). */
   init(): Promise<void> {
     if (!this.initPromise) {
       this.initPromise = (async () => {
@@ -103,25 +86,22 @@ export class VaultSession extends EventEmitter {
     return this.service.isLinked();
   }
 
-  /** Whether the whole vault is in memory (a check or the import has succeeded since startup). */
   isLoaded(): boolean {
     return this.hydrated;
   }
 
-  /** Why the stored link stopped working (the node's error), or null while it works. */
+  hasData(): boolean {
+    return this.service.status().vaultEntries > 0;
+  }
+
   linkProblem(): string | null {
     return this.broken;
   }
 
-  /** Whether a /link attempt is running on this session. */
   isLinking(): boolean {
     return this.linking;
   }
 
-  /**
-   * Runs the engine's runSync('checking') now. Returns false (and logs) when it failed.
-   * When the node rejects the stored credentials the session stops checking for good (see linkProblem()).
-   */
   async check(): Promise<boolean> {
     if (!this.service.isLinked() || this.broken) return false;
     this.lastCheckAt = Date.now();
@@ -131,10 +111,9 @@ export class VaultSession extends EventEmitter {
       return true;
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
-      if (isDeadLink(e) && this.service.isLinked()) {
+      if ((isDeadLink(e) && this.service.isLinked()) || isRemovedDevice(e)) {
         this.broken = text;
         this.stopTimer();
-        // The engine armed its own retry when the sync failed; drop it and any queued push.
         this.service['clearTimers']();
         log.warn('Vault link for user %s no longer works (%s); checks stopped until they unlink and link again.', this.userId, text);
       } else {
@@ -144,12 +123,6 @@ export class VaultSession extends EventEmitter {
     }
   }
 
-  /**
-   * Checks the vault first when the last check started more than 30 s ago.
-   * Call before profile/front commands (after deferring the interaction: a check can take a few seconds).
-   * Throws CloudError 'link broken' when the stored link no longer opens the vault, and
-   * 'not loaded' when the vault has not been read since startup (the node could not be reached).
-   */
   async freshen(maxAgeMs = FRESH_MS): Promise<void> {
     await this.init();
     if (!this.service.isLinked()) return;
@@ -163,14 +136,9 @@ export class VaultSession extends EventEmitter {
     if (!this.hydrated) throw new CloudError(0, 'not loaded', 'The vault could not be read from the Plural Star cloud yet. Try again in a minute.');
   }
 
-  /**
-   * Writes vault values (JSON-serialised like the app's store.set) into memory and pushes them now.
-   * Media keys are refused: the bot never uploads images. Refused unless the whole vault is in
-   * memory, so a value computed from an empty memory can never replace what the vault holds.
-   * Returns the raw values written.
-   */
   write(values: Record<string, unknown>): Record<string, string> {
     this.assertUsable();
+    if (!this.hasData()) throw new CloudError(0, 'no data', NO_DATA_TEXT);
     const raw: Record<string, string> = {};
     for (const k of Object.keys(values)) {
       if (k.startsWith('ps:media:')) throw new Error(`Plural Starbot does not write media (${k}).`);
@@ -181,11 +149,6 @@ export class VaultSession extends EventEmitter {
     return raw;
   }
 
-  /**
-   * write(), then waits (bounded) for the push and reports, key by key, whether the vault now holds
-   * the values. A failed push stays in memory and is retried by the engine, but is lost if the bot
-   * restarts first.
-   */
   async writeAndPush(values: Record<string, unknown>, timeoutMs = SETTLE_TIMEOUT_MS): Promise<PushResult> {
     const raw = this.write(values);
     await this.settle(timeoutMs);
@@ -194,7 +157,7 @@ export class VaultSession extends EventEmitter {
     const saved: string[] = [];
     for (const [k, v] of Object.entries(raw)) {
       if (this.platform.get(k) !== v) replaced.push(k);
-      else if (known[k]?.hash === this.service['keyHash'](k, v)) saved.push(k);
+      else if (known[k]?.hash === (await this.service['keyHash'](k, v))) saved.push(k);
     }
     if (replaced.length) return {ok: false, reason: 'conflict', replaced, saved};
     if (saved.length === Object.keys(raw).length) return {ok: true};
@@ -202,13 +165,6 @@ export class VaultSession extends EventEmitter {
     return {ok: false, reason: pending ? 'pending' : 'failed', error: this.service.status().lastError};
   }
 
-  // ---- linking ---------------------------------------------------------------
-
-  /**
-   * Links an existing vault by password. Never creates one: derives the credentials, asks the node
-   * whether the vault exists, and only then lets the engine link (linkWithPassword -> 'existing')
-   * and import it. A wrong password on an existing vault throws the engine's 'bad password' error.
-   */
   async linkWithPassword(password: string, onStage?: (stage: LinkStage) => void | Promise<void>): Promise<LinkResult> {
     await this.init();
     if (this.service.isLinked()) throw new CloudError(0, 'already linked', 'A vault is already linked to this Discord account.');
@@ -222,36 +178,46 @@ export class VaultSession extends EventEmitter {
     }
   }
 
-  /** The link itself, inside a link slot (at most two run at once: each derives the key twice). */
   private async linkExisting(password: string, onStage?: (stage: LinkStage) => void | Promise<void>): Promise<LinkResult> {
     await onStage?.('deriving');
-    const creds = await deriveVaultCredentials(password);
-    creds.kek.fill(0);
-    await onStage?.('looking-up');
-    const exists = await new CloudApi(this.cloudNodeUrl, '', this.platform.transport).lookup(creds.lookupId);
-    if (!exists) return {kind: 'not-found'};
-
-    await onStage?.('opening');
+    const shown = new Set<LinkStage>();
+    let staged: Promise<void> = Promise.resolve();
+    const report = (stage: LinkStage): void => {
+      if (shown.has(stage)) return;
+      shown.add(stage);
+      staged = staged
+        .then(async () => {
+          await onStage?.(stage);
+        })
+        .catch(() => {});
+    };
+    const off = this.service.subscribe(s => {
+      if (s.phase === 'deriving' && s.progress >= 1) report('looking-up');
+      else if (s.phase === 'checking') report('opening');
+    });
     let outcome;
     try {
       outcome = await this.service.linkWithPassword(password, true);
     } catch (e) {
       if (e instanceof VaultCreateRefused) return {kind: 'not-found'};
       throw e;
+    } finally {
+      off();
+      await staged;
     }
     if (outcome.kind !== 'existing') {
-      // Unreachable while the transport refuses vault creation; never keep a vault the bot made.
       await this.service.unlink();
       this.links.save(this.userId, null);
       return {kind: 'not-found'};
     }
 
     await onStage?.('importing');
+    const pending = this.service['pendingCreds'];
     try {
-      await this.service.importExisting(true);
+      await this.service.importExisting(true, true);
     } catch (e) {
       this.service.cancelPendingLink();
-      await this.removeStaleDevice(creds, e);
+      if (pending) await this.removeStaleDevice(pending, e, pending.deviceKey);
       throw e;
     }
     this.lastCheckAt = Date.now();
@@ -261,22 +227,17 @@ export class VaultSession extends EventEmitter {
     return {kind: 'linked', systemName: this.system()?.name || '', memberCount: rosterCount(this.members())};
   }
 
-  /**
-   * After a failed import the engine has dropped the link, but it may already have registered the bot
-   * as a device on the vault. Removes that device again (best effort), so no stale "Plural Starbot"
-   * stays listed. Skipped when the vault refused the credentials, which happens before registering.
-   */
-  private async removeStaleDevice(creds: {lookupId: string; authSecret: string}, cause: unknown): Promise<void> {
+  private async removeStaleDevice(creds: {lookupId: string; authSecret: string}, cause: unknown, deviceKey?: string): Promise<void> {
     if (cause instanceof CloudError && (cause.code === 'bad password' || cause.status === 401 || cause.status === 404)) return;
     try {
       const api = new CloudApi(this.cloudNodeUrl, '', this.platform.transport);
-      await api.unlinkDevice({lookupId: creds.lookupId, authSecret: creds.authSecret}, await this.platform.deviceSubId());
+      const sub = await this.platform.deviceSubId();
+      await api.unlinkDevice({lookupId: creds.lookupId, authSecret: creds.authSecret, deviceId: sub, deviceKey}, sub);
     } catch (e) {
       log.warn('Could not remove the Plural Starbot device after a failed link for user %s: %s', this.userId, e instanceof Error ? e.message : String(e));
     }
   }
 
-  /** Removes the bot's device from the vault and deletes the stored link and the in-memory vault. */
   async unlink(): Promise<UnlinkResult> {
     await this.init();
     this.stopTimer();
@@ -288,7 +249,6 @@ export class VaultSession extends EventEmitter {
       return {deviceRemoved: false, error: 'No vault was linked.'};
     }
     await this.settle();
-    // While unlink() runs, the engine only emits a still-linked status when removing the device failed.
     let failure: string | null = null;
     let armed = false;
     const off = this.service.subscribe(s => {
@@ -305,12 +265,10 @@ export class VaultSession extends EventEmitter {
     return {deviceRemoved: failure === null, error: failure};
   }
 
-  /** Stops the periodic check (shutdown, or the session is dropped). */
   stop(): void {
     this.stopTimer();
   }
 
-  /** Waits (bounded) for an in-flight or queued engine sync to finish, including a push scheduled with schedulePush(0). */
   async settle(timeoutMs = SETTLE_TIMEOUT_MS): Promise<void> {
     await new Promise<void>(r => setTimeout(r, 0));
     const pending = this.service['queued'] || this.service['syncing'];
@@ -319,8 +277,6 @@ export class VaultSession extends EventEmitter {
     await Promise.race([pending.catch(() => {}), new Promise<void>(r => (timer = setTimeout(r, timeoutMs)))]);
     if (timer) clearTimeout(timer);
   }
-
-  // ---- typed accessors (vault contents in memory) ---------------------------
 
   private json<T>(key: string): T | undefined {
     const raw = this.platform.get(key);
@@ -342,7 +298,6 @@ export class VaultSession extends EventEmitter {
     return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
   }
 
-  /** Every member record in ps:members, including deleted, archived and private ones. */
   members(): Member[] {
     return this.list<Member>(VAULT_KEYS.members);
   }
@@ -369,12 +324,10 @@ export class VaultSession extends EventEmitter {
     return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
   }
 
-  /** The vault object id of a key (link.known[key].id), e.g. for ps:media:av:<memberId>. */
   mediaObjectId(key: string): string | undefined {
     return this.platform.link()?.known[key]?.id;
   }
 
-  /** The media key whose vault object id is `id`, if this session holds it. */
   mediaKeyForObjectId(id: string): string | undefined {
     const known = this.platform.link()?.known;
     if (!known) return undefined;
@@ -384,7 +337,6 @@ export class VaultSession extends EventEmitter {
     return undefined;
   }
 
-  /** The data URI held for a media key, if any. */
   mediaDataUri(key: string): string | undefined {
     const v = this.platform.get(key);
     return v !== undefined && v.startsWith('data:') ? v : undefined;
@@ -393,8 +345,6 @@ export class VaultSession extends EventEmitter {
   phase(): CloudPhase {
     return this.service.status().phase;
   }
-
-  // ---- internals -------------------------------------------------------------
 
   private runSync(phase: CloudPhase): Promise<void> {
     return this.service['runSync'](phase);

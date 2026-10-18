@@ -10,7 +10,7 @@ Privacy Policy: https://github.com/ByHanyou/Plural-Starbot/blob/main/PRIVACY.md
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 24.7 or newer.
 - A Discord application with a bot user. Under **Bot → Privileged Gateway Intents**, **Message Content Intent** must be on (proxying reads messages). The invite needs the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Manage Messages, Manage Webhooks, Embed Links, Attach Files, Read Message History, Add Reactions, Mention Everyone (optional, for role pings).
 - A reachable Plural Star cloud node. The bot is meant to run on the same machine as the node and talks to it over localhost.
 - An HTTPS hostname on that machine for serving member avatars to Discord (the bot serves them itself; put the node's reverse proxy in front of it).
@@ -57,7 +57,7 @@ Send the bot a direct message and run `/link`; it asks for your Plural Star clou
 - `/autoproxy front` proxies every message as the first listed primary fronter; `/autoproxy member <name>` as a fixed member; `/autoproxy latch` as whichever member you last proxied as in that server (an emoji tag switches the latch; it expires after 6 hours without proxying); `/autoproxy off` turns it off. A message with an explicit tag always wins.
 - React ❌ to a proxied message of yours to delete it, ❓ to see who sent it (private reply). `/proxy edit` edits your last proxied message, or one you point at by message ID.
 - Attachments, replies and embeds are carried over.
-- **Display name.** By default a proxied message is posted under the member's name. `/proxy format <template>` changes that using formatting tags filled from the member's profile: `{Emoji}`, `{Name}`, `{Pronouns}`, `{Role}` and `{Sys Tag}`; anything else in the template is kept as typed, and empty values disappear cleanly (for example `{Emoji} {Name} ({Pronouns}) | {Sys Tag}`). `/proxy systag <text>` sets your Sys Tag (20 characters max); `/proxy systag clear` removes it. Both commands take a `scope`: **everywhere** (your default) or **this server** (an override for the server you run it in). Run either without a value to see what is in effect and a preview.
+- **Display name.** By default a proxied message is posted under the member's name. `/proxy format <template>` changes that using formatting tags filled from the member's profile: `{Emoji}`, `{Name}`, `{Pronouns}`, `{Role}` and `{Sys Tag}`; anything else in the template is kept as typed, and empty values disappear cleanly (for example `{Emoji} {Name} ({Pronouns}) | {Sys Tag}`). Add `member:<emoji or name>` to give one member their own format, used instead of yours: pick them from the list, or type their name or emoji (when several members share that emoji, type the name). Facets can have one; custom fronts are never proxied, so they cannot. `default` or `reset` as the template removes that member's format, so they go back to yours. `/proxy systag <text>` sets your Sys Tag (20 characters max); `/proxy systag clear` removes it. Both commands take a `scope`: **everywhere** (your default) or **this server** (an override for the server you run it in). The most specific format wins: a member's own format for this server, then their own format everywhere, then yours for this server, then yours everywhere. Run either without a value to see what is in effect and a preview (with `member`, for that member).
 
 ### Profiles and front
 

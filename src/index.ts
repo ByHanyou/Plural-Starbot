@@ -26,8 +26,6 @@ import {modules} from './modules/index';
 import {BotModule, commandJSON} from './modules/types';
 import {configureRegistry, loadAllSessions, stopAllSessions} from './vault/registry';
 
-// Permissions from README: View Channels, Send Messages, Manage Messages, Manage Webhooks, Embed Links,
-// Attach Files, Read Message History, Add Reactions, Mention Everyone.
 const INVITE_PERMISSIONS = new PermissionsBitField([
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
@@ -150,7 +148,6 @@ const main = async (): Promise<void> => {
   client.once(Events.ClientReady, async c => {
     log.info('Logged in as %s (id: %s).', c.user.tag, c.user.id);
 
-    // Servers that removed the bot while it was offline: drop their settings, as GuildDelete would have.
     try {
       for (const guildId of db().guildIdsWithSettings()) {
         if (c.guilds.cache.has(guildId)) continue;

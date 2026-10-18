@@ -12,7 +12,6 @@ const CACHE_OK = 'public, max-age=86400';
 
 const mimeOf = (dataUri: string): string => (/^data:([^;,]+)/.exec(dataUri)?.[1] || '').toLowerCase();
 
-/** Image bytes for a vault object id, looked up across every session in memory (avatars and banners only). */
 export const findImage = (id: string): {mime: string; bytes: Uint8Array} | null => {
   for (const s of allSessions()) {
     const key = s.mediaKeyForObjectId(id);
@@ -28,7 +27,6 @@ export const findImage = (id: string): {mime: string; bytes: Uint8Array} | null 
   return null;
 };
 
-/** Public URL for a member/system avatar or banner key (e.g. ps:media:av:<memberId>), or undefined when there is none. */
 export const avatarUrlFor = (session: VaultSession, key: string): string | undefined => {
   if (!isPublicImageKey(key)) return undefined;
   const id = session.mediaObjectId(key);
@@ -69,7 +67,6 @@ const handle = (req: IncomingMessage, res: ServerResponse): void => {
   res.end(method === 'HEAD' ? undefined : Buffer.from(img.bytes.buffer, img.bytes.byteOffset, img.bytes.length));
 };
 
-/** Starts the avatar server on 127.0.0.1:<port>; the reverse proxy forwards AVATAR_BASE_URL to it. */
 export const startAvatarServer = (port: number, host = '127.0.0.1'): Promise<Server> =>
   new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
