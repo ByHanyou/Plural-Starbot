@@ -220,6 +220,7 @@ export const handleMember = async (i: ChatInputCommandInteraction): Promise<void
     names: mentionNames(all, showPrivate),
     avatarUrl: avatarUrlFor(t.session, MEDIA_KEYS.memberAvatar(m.id)),
     bannerUrl: avatarUrlFor(t.session, MEDIA_KEYS.memberBanner(m.id)),
+    fieldImageUrl: fieldId => avatarUrlFor(t.session, MEDIA_KEYS.customField(m.id, fieldId)),
     ownerView: t.own,
     nav: {ownerId: t.user.id, privateView: showPrivate},
   });
@@ -284,6 +285,7 @@ export const handleMemberPage = async (i: ButtonInteraction): Promise<void> => {
     names: mentionNames(all, showPrivate),
     avatarUrl: avatarUrlFor(session, MEDIA_KEYS.memberAvatar(m.id)),
     bannerUrl: avatarUrlFor(session, MEDIA_KEYS.memberBanner(m.id)),
+    fieldImageUrl: fieldId => avatarUrlFor(session, MEDIA_KEYS.customField(m.id, fieldId)),
     ownerView: ref.ownerView,
     page: ref.page,
     nav: {ownerId: ref.ownerId, privateView: ref.privateView},
@@ -310,6 +312,17 @@ export const handleSystem = async (i: ChatInputCommandInteraction): Promise<void
   await sayCard(i, components);
 };
 
+const STALE_AFTER_MS = 15 * 60 * 1000;
+
+const staleNote = (s: VaultSession): string | null => {
+  const st = s.syncState();
+  const age = st.okAt ? Date.now() - st.okAt : Infinity;
+  if (!st.error && age < STALE_AFTER_MS) return null;
+  const when = st.okAt ? `<t:${Math.floor(st.okAt / 1000)}:R>` : 'never';
+  if (st.error) return `⚠️ This is the last front I could read from the vault (synced ${when}). Reading it fails right now: ${st.error}`;
+  return `⚠️ This front was last synced ${when}.`;
+};
+
 const showFront = async (i: ChatInputCommandInteraction, t: Target, showPrivate: boolean, note: string | null = null): Promise<void> => {
   const view = frontView({
     front: currentFront(t.session) ?? null,
@@ -320,8 +333,9 @@ const showFront = async (i: ChatInputCommandInteraction, t: Target, showPrivate:
     systemName: t.session.system()?.name || '',
     systemAvatarUrl: avatarUrlFor(t.session, MEDIA_KEYS.systemAvatar),
   });
-  if (view.embed) await say(i, note ? {content: note, embeds: [view.embed]} : {embeds: [view.embed]});
-  else await say(i, {content: note ? `${note}\n${NOBODY}` : NOBODY});
+  const content = [note, staleNote(t.session)].filter(Boolean).join('\n');
+  if (view.embed) await say(i, content ? {content, embeds: [view.embed]} : {embeds: [view.embed]});
+  else await say(i, {content: content ? `${content}\n${NOBODY}` : NOBODY});
 };
 
 const handleShow = async (i: ChatInputCommandInteraction): Promise<void> => {

@@ -58,6 +58,8 @@ export class VaultSession extends EventEmitter {
   private initPromise: Promise<void> | null = null;
   private hydrated = false;
   private broken: string | null = null;
+  private lastSyncOkAt = 0;
+  private lastSyncError: string | null = null;
 
   constructor(opts: VaultSessionOptions) {
     super();
@@ -98,6 +100,10 @@ export class VaultSession extends EventEmitter {
     return this.broken;
   }
 
+  syncState(): {okAt: number; error: string | null} {
+    return {okAt: this.lastSyncOkAt, error: this.broken ?? this.lastSyncError};
+  }
+
   isLinking(): boolean {
     return this.linking;
   }
@@ -108,9 +114,12 @@ export class VaultSession extends EventEmitter {
     try {
       await this.runSync('checking');
       this.hydrated = true;
+      this.lastSyncOkAt = Date.now();
+      this.lastSyncError = null;
       return true;
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
+      this.lastSyncError = text;
       if ((isDeadLink(e) && this.service.isLinked()) || isRemovedDevice(e)) {
         this.broken = text;
         this.stopTimer();
@@ -223,6 +232,8 @@ export class VaultSession extends EventEmitter {
     this.lastCheckAt = Date.now();
     this.hydrated = true;
     this.broken = null;
+    this.lastSyncOkAt = Date.now();
+    this.lastSyncError = null;
     this.startTimer();
     return {kind: 'linked', systemName: this.system()?.name || '', memberCount: rosterCount(this.members())};
   }
@@ -243,6 +254,8 @@ export class VaultSession extends EventEmitter {
     this.stopTimer();
     this.hydrated = false;
     this.broken = null;
+    this.lastSyncOkAt = 0;
+    this.lastSyncError = null;
     if (!this.service.isLinked()) {
       this.links.save(this.userId, null);
       this.platform.clear();

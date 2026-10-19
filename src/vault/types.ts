@@ -164,7 +164,12 @@ export const MEDIA_KEYS = {
   memberBanner: (memberId: string): string => `ps:media:bn:${memberId}`,
   systemAvatar: 'ps:media:sysav',
   systemBanner: 'ps:media:sysbn',
+  customField: (memberId: string, fieldId: string): string => `ps:media:cf:${memberId}:${fieldId}`,
 } as const;
 
 export const isPublicImageKey = (key: string): boolean =>
-  key.startsWith('ps:media:av:') || key.startsWith('ps:media:bn:') || key === MEDIA_KEYS.systemAvatar || key === MEDIA_KEYS.systemBanner;
+  key.startsWith('ps:media:av:') ||
+  key.startsWith('ps:media:bn:') ||
+  key.startsWith('ps:media:cf:') ||
+  key === MEDIA_KEYS.systemAvatar ||
+  key === MEDIA_KEYS.systemBanner;

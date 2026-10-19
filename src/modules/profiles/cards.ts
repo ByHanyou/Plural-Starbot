@@ -148,6 +148,7 @@ export interface MemberCardInput {
   names?: MentionNames;
   avatarUrl?: string;
   bannerUrl?: string;
+  fieldImageUrl?: (fieldId: string) => string | undefined;
   ownerView?: boolean;
   page?: number;
   nav?: MemberCardNav;
@@ -156,6 +157,12 @@ export interface MemberCardInput {
 const LINKED_SUBSYSTEMS = '**Linked Sub-systems**';
 const DESCRIPTION_BIO = '**Description / Bio**';
 const CUSTOM_FIELDS = '**Custom Fields**';
+const IMAGE_NOT_SYNCED = '-# (image not in the cloud: turn on “Include full-size images” in the app)';
+
+interface CustomItem {
+  text: string;
+  imageUrl?: string;
+}
 
 export const MEMBER_PAGE_ID = 'profiles:member-page:';
 const PAGE_LABEL_ID = 'profiles:member-page-label';
@@ -208,21 +215,25 @@ const addBanner = (box: ContainerBuilder, bannerUrl: string | undefined): void =
   box.addMediaGalleryComponents(g => g.addItems(item => item.setURL(url)));
 };
 
-const pageFields = (items: string[]): string[][] => {
+const pageFields = (items: CustomItem[]): CustomItem[][] => {
   const perPage = V2_LIMIT.components - FIELD_PAGE_FRAME;
   const budget = V2_LIMIT.text - CUSTOM_FIELDS.length;
-  const pages: string[][] = [];
-  let page: string[] = [];
+  const pages: CustomItem[][] = [];
+  let page: CustomItem[] = [];
   let used = 0;
+  let slots = 0;
   for (const item of items) {
-    const text = capText(item, budget);
-    if (page.length && (page.length >= perPage || used + text.length > budget)) {
+    const text = capText(item.text, budget);
+    const need = item.imageUrl ? 2 : 1;
+    if (page.length && (slots + need > perPage || used + text.length > budget)) {
       pages.push(page);
       page = [];
       used = 0;
+      slots = 0;
     }
-    page.push(text);
+    page.push({text, imageUrl: item.imageUrl});
     used += text.length;
+    slots += need;
   }
   if (page.length) pages.push(page);
   return pages;
@@ -282,12 +293,20 @@ export const memberCard = (i: MemberCardInput): CardComponents => {
   }
   const bio = descriptionToDiscord(m.description, i.names);
 
-  const custom: string[] = [];
+  const custom: CustomItem[] = [];
   const values = Array.isArray(m.customFields) ? m.customFields : [];
   for (const fd of Array.isArray(i.fieldDefs) ? i.fieldDefs : []) {
     if (!fd || typeof fd !== 'object' || typeof fd.id !== 'string') continue;
-    const text = customFieldText(fd, values.find(v => v && v.fieldId === fd.id)?.value, i.names);
-    if (text && text.trim()) custom.push(`**${escapeText(ellipsize(str(fd.name) || '-', LIMIT.fieldName))}**\n${text}`);
+    const value = values.find(v => v && v.fieldId === fd.id)?.value;
+    const label = `**${escapeText(ellipsize(str(fd.name) || '-', LIMIT.fieldName))}**`;
+    if (fd.type === 'image') {
+      if (value === undefined || value === null || value === '') continue;
+      const url = i.fieldImageUrl?.(fd.id);
+      custom.push(url ? {text: label, imageUrl: url} : {text: `${label}\n${IMAGE_NOT_SYNCED}`});
+      continue;
+    }
+    const text = customFieldText(fd, value, i.names);
+    if (text && text.trim()) custom.push({text: `${label}\n${text}`});
   }
 
   const fieldPages = pageFields(custom);
@@ -298,7 +317,10 @@ export const memberCard = (i: MemberCardInput): CardComponents => {
 
   if (page > 0) {
     addText(box, CUSTOM_FIELDS);
-    for (const text of fieldPages[page - 1]) addText(box, text);
+    for (const item of fieldPages[page - 1]) {
+      addText(box, item.text);
+      addBanner(box, item.imageUrl);
+    }
   } else {
     const footer = [m.isFacet ? 'Facet' : '', nav ? '' : notShown(custom.length)].filter(Boolean).join(' · ');
     const [top, middle, subs, about, foot] = fitTexts(
