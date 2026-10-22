@@ -1,7 +1,6 @@
 import type {CloudRequest, CloudResponse, CloudTransport} from '../cloud/cloudTypes';
+import {tunables} from '../config';
 import {lookupWindow} from './throttle';
-
-const DEFAULT_TIMEOUT_MS = 30000;
 
 export class VaultCreateRefused extends Error {
   constructor() {
@@ -26,18 +25,18 @@ const isLookupRequest = (req: CloudRequest): boolean => isPost(req, '/cloud/vaul
 export const fetchTransport: CloudTransport = {
   async request(req: CloudRequest): Promise<CloudResponse> {
     if (isCreateRequest(req)) throw new VaultCreateRefused();
-    if (isLookupRequest(req)) await lookupWindow.acquire();
+    if (isLookupRequest(req)) await lookupWindow().acquire();
     const headers: Record<string, string> = {...req.headers};
-    const hasBody = typeof req.bodyBase64 === 'string' && req.method !== 'GET' && req.method !== 'HEAD';
-    if (hasBody && !Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) headers['Content-Type'] = 'application/octet-stream';
+    const body = typeof req.bodyBase64 === 'string' && req.method !== 'GET' && req.method !== 'HEAD' ? Buffer.from(req.bodyBase64, 'base64') : undefined;
+    if (body && !Object.keys(headers).some(k => k.toLowerCase() === 'content-type')) headers['Content-Type'] = 'application/octet-stream';
     const controller = new AbortController();
-    const timeoutMs = req.timeoutMs || DEFAULT_TIMEOUT_MS;
+    const timeoutMs = req.timeoutMs || tunables().vaultHttpTimeoutMs;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(req.url, {
         method: req.method,
         headers,
-        body: hasBody ? Buffer.from(req.bodyBase64 as string, 'base64') : undefined,
+        body,
         signal: controller.signal,
         redirect: 'error',
       });

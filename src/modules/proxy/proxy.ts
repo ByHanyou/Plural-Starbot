@@ -11,12 +11,14 @@ import {
   WebhookMessageCreateOptions,
 } from 'discord.js';
 import {avatarUrlFor} from '../../avatars';
+import {tunables} from '../../config';
 import {db} from '../../db';
 import {log} from '../../log';
+import {errorText, orNull} from '../../util';
 import {hasStoredLink, linkedSession, peekSession} from '../../vault/registry';
 import type {VaultSession} from '../../vault/session';
 import {MEDIA_KEYS, Member} from '../../vault/types';
-import {DEFAULT_FORMAT, proxyNameFor} from './format';
+import {proxyNameFor} from './format';
 import {planProxy} from './match';
 import {postProxyLog} from './proxylog';
 import {getAutoproxy, getNameSettings} from './settings';
@@ -24,6 +26,7 @@ import {
   allowedMentionsFor,
   AllowedMentions,
   ellipsize,
+  EMBED_LIMIT,
   embedColor,
   planAttachments,
   replyQuote,
@@ -35,11 +38,6 @@ import {isApiError, sendViaWebhook, targetOf} from './webhooks';
 import {warnHourly} from './warn';
 
 const REPLY_MARK = ' ' + String.fromCharCode(0x2003, 0x21a9, 0xfe0f);
-const DOWNLOAD_TIMEOUT_MS = 60 * 1000;
-
-export const webhookUsername = (m: Member, format: string = DEFAULT_FORMAT, sysTag = ''): string => proxyNameFor(m, format, sysTag);
-
-export const memberAvatarUrl = (session: VaultSession, m: Member): string | undefined => avatarUrlFor(session, MEDIA_KEYS.memberAvatar(m.id));
 
 export const mentionsFor = (content: string, channel: GuildTextBasedChannel, member: GuildMember | null): AllowedMentions => {
   const everyone = !!member && !!channel.permissionsFor(member)?.has(PermissionFlagsBits.MentionEveryone);
@@ -51,7 +49,7 @@ const canProxyIn = async (message: Message<true>): Promise<boolean> => {
   const target = targetOf(channel);
   if (!target) return false;
   const guild = message.guild;
-  const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+  const me = guild.members.me ?? (await orNull(guild.members.fetchMe(), `Fetching the bot's own member in '${guild.name}'`));
   if (!me) return false;
   const missing: string[] = [];
   if (!channel.permissionsFor(me)?.has(PermissionFlagsBits.ManageMessages)) missing.push('Manage Messages');
@@ -63,10 +61,14 @@ const canProxyIn = async (message: Message<true>): Promise<boolean> => {
 
 const download = async (url: string): Promise<Buffer | null> => {
   try {
-    const res = await fetch(url, {signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)});
-    if (!res.ok) return null;
+    const res = await fetch(url, {signal: AbortSignal.timeout(tunables().downloadTimeoutMs)});
+    if (!res.ok) {
+      log.debug('Attachment download returned status %d.', res.status);
+      return null;
+    }
     return Buffer.from(await res.arrayBuffer());
-  } catch {
+  } catch (e) {
+    log.debug('Attachment download failed: %s', errorText(e));
     return null;
   }
 };
@@ -76,12 +78,13 @@ const replyEmbed = async (message: Message<true>, member: Member): Promise<Embed
   let ref: Message;
   try {
     ref = await message.fetchReference();
-  } catch {
+  } catch (e) {
+    log.debug('Could not fetch the message %s replies to: %s', message.id, errorText(e));
     return null;
   }
   const name = ref.member?.displayName ?? ref.author.displayName;
   const embed = new EmbedBuilder()
-    .setAuthor({name: ellipsize(`${name}${REPLY_MARK}`, 256), iconURL: (ref.member ?? ref.author).displayAvatarURL()})
+    .setAuthor({name: ellipsize(`${name}${REPLY_MARK}`, EMBED_LIMIT.author), iconURL: (ref.member ?? ref.author).displayAvatarURL()})
     .setDescription(replyQuote(ref.content, ref.attachments.size > 0, ref.url));
   const color = embedColor(member.color);
   if (color !== null) embed.setColor(color);
@@ -91,7 +94,9 @@ const replyEmbed = async (message: Message<true>, member: Member): Promise<Embed
 const deleteQuietly = async (m: Message): Promise<void> => {
   try {
     await m.delete();
-  } catch {}
+  } catch (e) {
+    log.debug('Could not delete message %s: %s', m.id, errorText(e));
+  }
 };
 
 const repost = async (message: Message<true>, session: VaultSession, member: Member, text: string): Promise<void> => {
@@ -117,8 +122,8 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
   if (!chunks.length && !files.length) return;
 
   const names = getNameSettings(message.guildId, message.author.id, member.id);
-  const username = webhookUsername(member, names.format.value, names.sysTag.value);
-  const avatarURL = memberAvatarUrl(session, member);
+  const username = proxyNameFor(member, names.format.value, names.sysTag.value);
+  const avatarURL = avatarUrlFor(session, MEDIA_KEYS.memberAvatar(member.id));
   const allowedMentions = mentionsFor(body, message.channel, message.member);
   const flags: ('SuppressEmbeds' | 'SuppressNotifications')[] = [];
   if (message.flags.has(MessageFlags.SuppressEmbeds)) flags.push('SuppressEmbeds');
@@ -138,7 +143,7 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
       sent.push(await sendViaWebhook(target, opts));
     }
   } catch (e) {
-    warnHourly(`send:${message.channelId}`, "Proxying failed in #%s ('%s'): %s", message.channel.name, message.guild.name, e instanceof Error ? e.message : String(e));
+    warnHourly(`send:${message.channelId}`, "Proxying failed in #%s ('%s'): %s", message.channel.name, message.guild.name, errorText(e));
     for (const m of sent) await deleteQuietly(m);
     return;
   }
@@ -160,7 +165,7 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
     await message.delete();
   } catch (e) {
     if (!isApiError(e, RESTJSONErrorCodes.UnknownMessage)) {
-      log.warn('Proxied message %s but could not delete the original: %s', message.id, e instanceof Error ? e.message : String(e));
+      log.warn('Proxied message %s but could not delete the original: %s', message.id, errorText(e));
     }
   }
 
@@ -202,7 +207,7 @@ export const handleMessage = async (message: Message): Promise<void> => {
     try {
       session = await linkedSession(message.author.id);
     } catch (e) {
-      log.debug('No vault session for %s: %s', message.author.id, e instanceof Error ? e.message : String(e));
+      log.debug('No vault session for %s: %s', message.author.id, errorText(e));
       return;
     }
     if (!session) return;

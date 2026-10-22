@@ -1,4 +1,6 @@
-export class SlidingWindow {
+import {tunables} from '../config';
+
+class SlidingWindow {
   private readonly stamps: number[] = [];
   private tail: Promise<void> = Promise.resolve();
 
@@ -25,7 +27,7 @@ export class SlidingWindow {
   }
 }
 
-export class Semaphore {
+class Semaphore {
   private active = 0;
   private readonly waiting: (() => void)[] = [];
 
@@ -48,7 +50,7 @@ export class Semaphore {
   }
 }
 
-export class AttemptLimiter {
+class AttemptLimiter {
   private readonly attempts = new Map<string, number[]>();
 
   constructor(
@@ -76,8 +78,12 @@ export class AttemptLimiter {
   }
 }
 
-export const lookupWindow = new SlidingWindow(4, 60 * 1000);
+let attempts: AttemptLimiter | null = null;
+let lookups: SlidingWindow | null = null;
+let links: Semaphore | null = null;
 
-export const linkSlots = new Semaphore(2);
+export const linkAttempts = (): AttemptLimiter => (attempts ??= new AttemptLimiter(tunables().linkAttempts, tunables().linkAttemptWindowMs));
 
-export const linkAttempts = new AttemptLimiter(3, 10 * 60 * 1000);
+export const lookupWindow = (): SlidingWindow => (lookups ??= new SlidingWindow(tunables().lookupsPerMinute, 60 * 1000));
+
+export const linkSlots = (): Semaphore => (links ??= new Semaphore(tunables().linkSlots));

@@ -1,12 +1,13 @@
 export const MESSAGE_LIMIT = 2000;
 export const WEBHOOK_NAME_LIMIT = 80;
+export const EMBED_LIMIT = {title: 256, description: 4096, fields: 25, fieldName: 256, fieldValue: 1024, footer: 2048, author: 256, total: 6000};
 const MIB = 1024 * 1024;
 
 export const uploadLimitBytes = (premiumTier: number): number => (premiumTier >= 3 ? 100 * MIB : premiumTier === 2 ? 50 * MIB : 10 * MIB);
 const HAIR_SPACE = String.fromCharCode(0x200a);
 const SINGLE_CHARACTER_PAD = String.fromCharCode(0x17b5);
 
-export const FALLBACK_MEMBER_NAME = 'Plural Star member';
+const FALLBACK_MEMBER_NAME = 'Plural Star member';
 
 export const truncateUnits = (s: string, max: number): string => {
   if (s.length <= max) return s;
@@ -74,9 +75,12 @@ export interface LogFooterInput {
 }
 
 export const logFooter = (o: LogFooterInput): string =>
-  ellipsize(`Message ID: ${o.messageId} | Original Message ID: ${o.originalId}`, 2048);
+  ellipsize(`Message ID: ${o.messageId} | Original Message ID: ${o.originalId}`, EMBED_LIMIT.footer);
 
 export const logSender = (senderId: string): string => `<@${senderId}>`;
+
+export const jumpUrl = (guildId: string | null, channelId: string, messageId: string): string =>
+  `https://discord.com/channels/${guildId ?? '@me'}/${channelId}/${messageId}`;
 
 export type MentionKind = 'users' | 'roles' | 'everyone';
 
@@ -112,7 +116,7 @@ export const planAttachments = (items: AttachmentInfo[], limit = uploadLimitByte
   return {keep, skipped};
 };
 
-const megabytes = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const megabytes = (bytes: number): string => `${(bytes / MIB).toFixed(1)} MB`;
 
 export const tooLargeNote = (a: AttachmentInfo): string =>
   `-# 📎 \`${a.name.replace(/`/g, "'")}\` (${Number.isFinite(a.size) ? megabytes(a.size) : 'unknown size'}) was too large to carry over.`;

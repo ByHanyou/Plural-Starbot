@@ -1,41 +1,58 @@
+import {asRecord} from '../../util';
 import type {FrontSortMode, FrontState, FrontTier, FrontTierKey, HistoryChangeType, HistoryEntry} from '../../vault/types';
 
 export const TIER_ORDER: readonly FrontTierKey[] = ['primary', 'coFront', 'coConscious'];
 
-export const emptyTier = (): FrontTier => ({memberIds: [], note: ''});
+const emptyTier = (): FrontTier => ({memberIds: [], note: ''});
 
-export const migrateFrontState = (raw: any): FrontState | null => {
-  if (!raw) return null;
-  if (raw.primary) return raw as FrontState;
+const stringList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+const optString = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+const optNumber = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+const parseFrontTier = (v: unknown): FrontTier => {
+  const r = asRecord(v);
   return {
-    primary: {memberIds: raw.memberIds || [], mood: raw.mood, note: raw.note || '', location: raw.location},
-    coFront: {memberIds: [], note: ''},
-    coConscious: {memberIds: [], note: ''},
-    startTime: raw.startTime || Date.now(),
+    memberIds: stringList(r?.memberIds),
+    mood: optString(r?.mood),
+    note: optString(r?.note) || '',
+    location: optString(r?.location),
+    energyLevel: optNumber(r?.energyLevel),
   };
 };
 
-export const readFront = (raw: unknown): FrontState | null => {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const f = migrateFrontState(raw);
-  if (!f) return null;
-  let fixed: FrontState | null = null;
-  for (const k of TIER_ORDER) {
-    const t = f[k] as FrontTier | undefined;
-    if (t && typeof t === 'object' && Array.isArray(t.memberIds)) continue;
-    fixed = fixed || {...f};
-    fixed[k] = t && typeof t === 'object' ? {...t, memberIds: []} : emptyTier();
+export const migrateFrontState = (raw: unknown): FrontState | null => {
+  const r = asRecord(raw);
+  if (!r) return null;
+  if (r.primary) {
+    const sinceRaw = asRecord(r.memberSince);
+    const memberSince: Record<string, number> = {};
+    if (sinceRaw) {
+      for (const [id, at] of Object.entries(sinceRaw)) {
+        const n = optNumber(at);
+        if (n !== undefined) memberSince[id] = n;
+      }
+    }
+    return {
+      primary: parseFrontTier(r.primary),
+      coFront: parseFrontTier(r.coFront),
+      coConscious: parseFrontTier(r.coConscious),
+      startTime: optNumber(r.startTime) ?? Date.now(),
+      ...(sinceRaw ? {memberSince} : {}),
+    };
   }
-  return fixed || f;
+  return {
+    primary: parseFrontTier(r),
+    coFront: emptyTier(),
+    coConscious: emptyTier(),
+    startTime: optNumber(r.startTime) || Date.now(),
+  };
 };
 
 export const allFrontMemberIds = (f: FrontState | null): string[] =>
   f ? [...f.primary.memberIds, ...f.coFront.memberIds, ...f.coConscious.memberIds] : [];
 
-export const isFrontEmpty = (f: FrontState | null): boolean =>
-  !f || (f.primary.memberIds.length === 0 && f.coFront.memberIds.length === 0 && f.coConscious.memberIds.length === 0);
-
-export const withMemberSince = (next: FrontState | null, prev: FrontState | null, now: number): FrontState | null => {
+const withMemberSince = (next: FrontState | null, prev: FrontState | null, now: number): FrontState | null => {
   if (!next) return next;
   const prevSince = prev?.memberSince || {};
   const prevIds = new Set(prev ? allFrontMemberIds(prev) : []);
@@ -46,13 +63,19 @@ export const withMemberSince = (next: FrontState | null, prev: FrontState | null
   return {...next, memberSince: since};
 };
 
-export const frontSessionStart = (f: FrontState, include?: (id: string) => boolean): number => {
-  const any = f as any;
-  const since: Record<string, number> = any?.memberSince || {};
-  const segment = typeof any?.startTime === 'number' && any.startTime > 0 ? any.startTime : 0;
-  for (const key of ['primary', 'coFront', 'coConscious']) {
-    const tier = any?.[key];
-    const ids: string[] = tier && Array.isArray(tier.memberIds) ? tier.memberIds.filter((id: string) => !include || include(id)) : [];
+export interface FrontTimes {
+  primary: {memberIds: string[]};
+  coFront: {memberIds: string[]};
+  coConscious: {memberIds: string[]};
+  startTime: number;
+  memberSince?: Record<string, number>;
+}
+
+export const frontSessionStart = (f: FrontTimes, include?: (id: string) => boolean): number => {
+  const since = f.memberSince || {};
+  const segment = f.startTime > 0 ? f.startTime : 0;
+  for (const key of ['primary', 'coFront', 'coConscious'] as const) {
+    const ids = f[key].memberIds.filter(id => !include || include(id));
     if (ids.length === 0) continue;
     let earliest = segment;
     for (const id of ids) {
@@ -64,7 +87,7 @@ export const frontSessionStart = (f: FrontState, include?: (id: string) => boole
   return f.startTime;
 };
 
-export const frontToHistoryEntry = (f: FrontState, endTime: number | null, changeType: HistoryChangeType = 'front', changeTier?: FrontTierKey): HistoryEntry => ({
+const frontToHistoryEntry = (f: FrontState, endTime: number | null, changeType: HistoryChangeType = 'front', changeTier?: FrontTierKey): HistoryEntry => ({
   memberIds: f.primary.memberIds,
   startTime: f.startTime,
   endTime,
@@ -92,7 +115,10 @@ export interface FrontWrite {
   history: HistoryEntry[];
 }
 
-export const updateFront = (
+const isOpenFrontEntry = (e: HistoryEntry, startTime: number): boolean =>
+  e.endTime === null && e.startTime === startTime && (!e.changeType || e.changeType === 'front');
+
+export const computeFrontUpdate = (
   front: FrontState | null,
   history: HistoryEntry[],
   primary: FrontTier,
@@ -111,27 +137,27 @@ export const updateFront = (
 
   const sameMembers = (a: string[] = [], b: string[] = []) =>
     a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|');
-  const continuing = !!front && !isEmpty
+  const continued = front && !isEmpty
     && sameMembers(front.primary.memberIds, cleanPrimary.memberIds)
     && sameMembers(front.coFront.memberIds, cleanCoFront.memberIds)
-    && sameMembers(front.coConscious.memberIds, cleanCoConscious.memberIds);
+    && sameMembers(front.coConscious.memberIds, cleanCoConscious.memberIds)
+    ? front : null;
 
   const explicitLocation = cleanPrimary.location?.trim() || undefined;
-  const nf: FrontState | null = isEmpty ? null : withMemberSince({primary: {...cleanPrimary, location: explicitLocation}, coFront: cleanCoFront, coConscious: cleanCoConscious, startTime: continuing ? front!.startTime : now}, front, now);
+  const nf: FrontState | null = isEmpty ? null : withMemberSince({primary: {...cleanPrimary, location: explicitLocation}, coFront: cleanCoFront, coConscious: cleanCoConscious, startTime: continued ? continued.startTime : now}, front, now);
 
   let newHistory = [...history];
-  if (front && !continuing) {
-    newHistory = newHistory.map(e =>
-      e.endTime === null && e.startTime === front.startTime && (!e.changeType || e.changeType === 'front') ? {...e, endTime: now} : e);
+  if (front && !continued) {
+    newHistory = newHistory.map(e => (isOpenFrontEntry(e, front.startTime) ? {...e, endTime: now} : e));
   }
 
   let finalFront = nf;
   if (nf) {
-    if (continuing) {
+    if (continued) {
       const extras: HistoryEntry[] = [];
-      const moodChanged = (nf.primary.mood || undefined) !== (front!.primary.mood || undefined);
-      const locChanged = (nf.primary.location || undefined) !== (front!.primary.location || undefined);
-      const noteChanged = (nf.primary.note || undefined) !== (front!.primary.note || undefined);
+      const moodChanged = (nf.primary.mood || undefined) !== (continued.primary.mood || undefined);
+      const locChanged = (nf.primary.location || undefined) !== (continued.primary.location || undefined);
+      const noteChanged = (nf.primary.note || undefined) !== (continued.primary.note || undefined);
       if (moodChanged || locChanged) {
         const entry = frontToHistoryEntry(nf, null, moodChanged ? 'mood' : 'location');
         entry.changeTime = now;
@@ -144,18 +170,16 @@ export const updateFront = (
       }
       const tierTracked = (a: FrontTier, b: FrontTier) =>
         (a.mood || undefined) !== (b.mood || undefined) || (a.energyLevel ?? undefined) !== (b.energyLevel ?? undefined);
-      const segment = tierTracked(nf.primary, front!.primary) || tierTracked(nf.coFront, front!.coFront)
-        || tierTracked(nf.coConscious, front!.coConscious) || locChanged;
+      const segment = tierTracked(nf.primary, continued.primary) || tierTracked(nf.coFront, continued.coFront)
+        || tierTracked(nf.coConscious, continued.coConscious) || locChanged;
       if (segment) {
         finalFront = {...nf, startTime: now};
         const segEntry = frontToHistoryEntry(finalFront, null, 'front');
-        newHistory = newHistory.map(e =>
-          e.endTime === null && e.startTime === front!.startTime && (!e.changeType || e.changeType === 'front') ? {...e, endTime: now} : e);
+        newHistory = newHistory.map(e => (isOpenFrontEntry(e, continued.startTime) ? {...e, endTime: now} : e));
         newHistory = [segEntry, ...extras, ...newHistory];
       } else {
         const frontEntry = frontToHistoryEntry(nf, null, 'front');
-        newHistory = newHistory.map(e =>
-          e.endTime === null && e.startTime === front!.startTime && (!e.changeType || e.changeType === 'front') ? frontEntry : e);
+        newHistory = newHistory.map(e => (isOpenFrontEntry(e, continued.startTime) ? frontEntry : e));
         newHistory = [...extras, ...newHistory];
       }
     } else {
@@ -170,18 +194,17 @@ export const updateFront = (
 export type FrontTiers = Record<FrontTierKey, FrontTier>;
 
 const MOOD_DELIMITER = ', ';
-export const parseMoodList = (mood: string | undefined): string[] =>
+const parseMoodList = (mood: string | undefined): string[] =>
   (mood || '').split(',').map(s => s.trim()).filter(Boolean);
-export const serializeMoodList = (moods: string[]): string =>
+const serializeMoodList = (moods: string[]): string =>
   moods.filter(Boolean).map(s => s.trim()).filter(Boolean).join(MOOD_DELIMITER);
 
 const resolveMood = (mood: string): string | undefined => serializeMoodList(parseMoodList(mood)) || undefined;
 
-export const setFrontTiers = (current: FrontState | null, tier: FrontTierKey, ids: string[]): FrontTiers => {
-  const c = current;
+export const setFrontTiers = (c: FrontState | null, tier: FrontTierKey, ids: string[]): FrontTiers => {
   const seedP = new Set<string>(c?.primary?.memberIds || []);
-  const seedCf = new Set<string>((c?.coFront?.memberIds || []).filter((id: string) => !seedP.has(id)));
-  const seedCc = new Set<string>((c?.coConscious?.memberIds || []).filter((id: string) => !seedP.has(id) && !seedCf.has(id)));
+  const seedCf = new Set<string>((c?.coFront?.memberIds || []).filter(id => !seedP.has(id)));
+  const seedCc = new Set<string>((c?.coConscious?.memberIds || []).filter(id => !seedP.has(id) && !seedCf.has(id)));
   const sets: Record<FrontTierKey, Set<string>> = {primary: seedP, coFront: seedCf, coConscious: seedCc};
   const chosen = new Set(ids);
   for (const key of TIER_ORDER) {
@@ -198,7 +221,7 @@ export const setFrontTiers = (current: FrontState | null, tier: FrontTierKey, id
     memberIds: [...sets[key]],
     mood: resolveMood(c?.[key]?.mood || ''),
     note: c?.[key]?.note || '',
-    location: (c?.[key]?.location || '') || undefined,
+    location: c?.[key]?.location || undefined,
     energyLevel: c?.[key]?.energyLevel,
   });
   return {primary: build('primary'), coFront: build('coFront'), coConscious: build('coConscious')};
@@ -207,9 +230,9 @@ export const setFrontTiers = (current: FrontState | null, tier: FrontTierKey, id
 export const quickAddTiers = (front: FrontState | null, id: string, tierKey: FrontTierKey): FrontTiers => {
   const strip = (tier: FrontTier): FrontTier => ({...tier, memberIds: tier.memberIds.filter(x => x !== id)});
   const tiers: FrontTiers = {
-    primary: front ? strip(front.primary) : {memberIds: [], note: ''},
-    coFront: front ? strip(front.coFront) : {memberIds: [], note: ''},
-    coConscious: front ? strip(front.coConscious) : {memberIds: [], note: ''},
+    primary: front ? strip(front.primary) : emptyTier(),
+    coFront: front ? strip(front.coFront) : emptyTier(),
+    coConscious: front ? strip(front.coConscious) : emptyTier(),
   };
   tiers[tierKey] = {...tiers[tierKey], memberIds: [...tiers[tierKey].memberIds, id]};
   return tiers;

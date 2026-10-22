@@ -12,7 +12,7 @@ const CACHE_OK = 'public, max-age=86400';
 
 const mimeOf = (dataUri: string): string => (/^data:([^;,]+)/.exec(dataUri)?.[1] || '').toLowerCase();
 
-export const findImage = (id: string): {mime: string; bytes: Uint8Array} | null => {
+const findImage = (id: string): {mime: string; bytes: Uint8Array} | null => {
   for (const s of allSessions()) {
     const key = s.mediaKeyForObjectId(id);
     if (!key || !isPublicImageKey(key)) continue;
@@ -35,6 +35,11 @@ export const avatarUrlFor = (session: VaultSession, key: string): string | undef
   return `${config().avatarBaseUrl}/avatar/${id}`;
 };
 
+const notFound = (res: ServerResponse): void => {
+  res.writeHead(404, {'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store'});
+  res.end('Not found');
+};
+
 const handle = (req: IncomingMessage, res: ServerResponse): void => {
   const method = req.method || 'GET';
   let path = '/';
@@ -43,8 +48,7 @@ const handle = (req: IncomingMessage, res: ServerResponse): void => {
   } catch {}
   const m = ROUTE.exec(path);
   if (!m) {
-    res.writeHead(404, {'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store'});
-    res.end('Not found');
+    notFound(res);
     return;
   }
   if (method !== 'GET' && method !== 'HEAD') {
@@ -54,8 +58,7 @@ const handle = (req: IncomingMessage, res: ServerResponse): void => {
   }
   const img = findImage(m[1]);
   if (!img) {
-    res.writeHead(404, {'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store'});
-    res.end('Not found');
+    notFound(res);
     return;
   }
   res.writeHead(200, {

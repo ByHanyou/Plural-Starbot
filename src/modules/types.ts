@@ -13,4 +13,4 @@ export interface BotModule {
 }
 
 export const commandJSON = (c: CommandData): RESTPostAPIApplicationCommandsJSONBody =>
-  'toJSON' in c && typeof c.toJSON === 'function' ? c.toJSON() : (c as RESTPostAPIApplicationCommandsJSONBody);
+  'toJSON' in c ? c.toJSON() : c;

@@ -1,14 +1,13 @@
 import {escapeMarkdown, MessageReaction, PartialMessageReaction, RESTJSONErrorCodes, User, userMention} from 'discord.js';
 import {db} from '../../db';
 import {log} from '../../log';
+import {errorText, orNull} from '../../util';
+import {jumpUrl} from './text';
 import {isApiError} from './webhooks';
 
 const VARIATION_SELECTOR_16 = String.fromCharCode(0xfe0f);
 const DELETE = '❌';
 const WHO = '❓';
-
-const jumpUrl = (guildId: string | null, channelId: string, messageId: string): string =>
-  `https://discord.com/channels/${guildId ?? '@me'}/${channelId}/${messageId}`;
 
 const emojiOf = (reaction: MessageReaction | PartialMessageReaction): string => (reaction.emoji.name ?? '').split(VARIATION_SELECTOR_16).join('');
 
@@ -32,7 +31,7 @@ export const handleReaction = async (reaction: MessageReaction, user: User): Pro
       await message.delete();
     } catch (e) {
       if (!isApiError(e, RESTJSONErrorCodes.UnknownMessage)) {
-        log.warn('Could not delete proxied message %s for its sender: %s', message.id, e instanceof Error ? e.message : String(e));
+        log.warn('Could not delete proxied message %s for its sender: %s', message.id, errorText(e));
         return;
       }
     }
@@ -40,7 +39,7 @@ export const handleReaction = async (reaction: MessageReaction, user: User): Pro
     return;
   }
 
-  const sender = await reaction.client.users.fetch(record.userId).catch(() => null);
+  const sender = await orNull(reaction.client.users.fetch(record.userId), `Fetching the sender ${record.userId} of proxied message ${message.id}`);
   const shown = message.author?.username || 'a member';
   const link = jumpUrl(record.guildId, record.channelId, record.messageId);
   const text =
@@ -49,11 +48,11 @@ export const handleReaction = async (reaction: MessageReaction, user: User): Pro
   try {
     await user.send({content: text, allowedMentions: {parse: []}});
   } catch (e) {
-    log.debug('Could not DM %s about proxied message %s: %s', user.id, message.id, e instanceof Error ? e.message : String(e));
+    log.debug('Could not DM %s about proxied message %s: %s', user.id, message.id, errorText(e));
   }
   try {
     await reaction.users.remove(user.id);
   } catch (e) {
-    log.debug('Could not remove a ❓ reaction on %s: %s', message.id, e instanceof Error ? e.message : String(e));
+    log.debug('Could not remove a ❓ reaction on %s: %s', message.id, errorText(e));
   }
 };

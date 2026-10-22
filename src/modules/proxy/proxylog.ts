@@ -1,5 +1,6 @@
 import {EmbedBuilder, Guild, Message, User} from 'discord.js';
-import {ellipsize, logFooter, logSender} from './text';
+import {errorText} from '../../util';
+import {ellipsize, EMBED_LIMIT, logFooter, logSender} from './text';
 import {getLogChannel} from './settings';
 import {warnHourly} from './warn';
 
@@ -13,9 +14,9 @@ export interface ProxyLogEntry {
   content: string;
 }
 
-export const buildLogEmbed = (e: ProxyLogEntry): EmbedBuilder => {
+const buildLogEmbed = (e: ProxyLogEntry): EmbedBuilder => {
   const embed = new EmbedBuilder()
-    .setAuthor({name: ellipsize(`#${e.channelName}: ${e.shownName}`, 256), ...(e.avatarUrl ? {iconURL: e.avatarUrl} : {})})
+    .setAuthor({name: ellipsize(`#${e.channelName}: ${e.shownName}`, EMBED_LIMIT.author), ...(e.avatarUrl ? {iconURL: e.avatarUrl} : {})})
     .setFooter({
       text: logFooter({
         messageId: e.sent.id,
@@ -24,7 +25,7 @@ export const buildLogEmbed = (e: ProxyLogEntry): EmbedBuilder => {
     })
     .setTimestamp(e.sent.createdTimestamp || Date.now());
   if (e.avatarUrl) embed.setThumbnail(e.avatarUrl);
-  if (e.content.trim()) embed.setDescription(ellipsize(e.content, 4096));
+  if (e.content.trim()) embed.setDescription(ellipsize(e.content, EMBED_LIMIT.description));
   embed.addFields({name: 'Sender', value: logSender(e.sender.id)});
   const files = [...e.sent.attachments.values()];
   if (files.length) {
@@ -32,11 +33,11 @@ export const buildLogEmbed = (e: ProxyLogEntry): EmbedBuilder => {
     let used = 0;
     for (const a of files) {
       const line = `[${a.name.replace(/[[\]]/g, '')}](${a.url})`;
-      if (used + line.length + 1 > 1024) break;
+      if (used + line.length + 1 > EMBED_LIMIT.fieldValue) break;
       lines.push(line);
       used += line.length + 1;
     }
-    embed.addFields({name: 'Attachments', value: lines.join('\n') || files.map(a => a.name).join(', ').slice(0, 1024)});
+    embed.addFields({name: 'Attachments', value: lines.join('\n') || files.map(a => a.name).join(', ').slice(0, EMBED_LIMIT.fieldValue)});
   }
   return embed;
 };
@@ -52,6 +53,6 @@ export const postProxyLog = async (guild: Guild, entry: ProxyLogEntry): Promise<
     }
     await channel.send({content: entry.sent.url, embeds: [buildLogEmbed(entry)], allowedMentions: {parse: []}});
   } catch (e) {
-    warnHourly(`log-send:${channelId}`, "Could not post to the proxy log channel %s in '%s': %s", channelId, guild.name, e instanceof Error ? e.message : String(e));
+    warnHourly(`log-send:${channelId}`, "Could not post to the proxy log channel %s in '%s': %s", channelId, guild.name, errorText(e));
   }
 };

@@ -1,5 +1,7 @@
+import {tunables} from '../../config';
 import {db} from '../../db';
 import {log} from '../../log';
+import {isRecord} from '../../util';
 
 export const MODULE = 'health';
 const SETTINGS_KEY = 'settings';
@@ -22,9 +24,9 @@ export interface HealthSettings {
   groups: Record<string, HealthGroup>;
 }
 
-export const DEFAULT_SETTINGS: HealthSettings = {
+const DEFAULT_SETTINGS: HealthSettings = {
   channel_id: null,
-  timezone: 'America/New_York',
+  timezone: tunables().defaultTimezone,
   start_time: '08:00',
   interval_hours: 6,
   enabled: true,
@@ -68,22 +70,43 @@ export const DEFAULT_SETTINGS: HealthSettings = {
   },
 };
 
-const isDict = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isString = (v: unknown): v is string => typeof v === 'string';
+const isStringOrNull = (v: unknown): v is string | null => v === null || isString(v);
+const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isNumberOrNull = (v: unknown): v is number | null => v === null || isNumber(v);
+const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
+const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every(isString);
+const or = <T>(v: unknown, ok: (x: unknown) => x is T, fallback: T): T => (ok(v) ? v : fallback);
 
-export const mergeSettings = (data: unknown): HealthSettings => {
-  const merged = structuredClone(DEFAULT_SETTINGS) as unknown as Record<string, unknown> & {groups: Record<string, Record<string, unknown>>};
-  if (isDict(data)) {
-    for (const [key, value] of Object.entries(data)) {
-      if (key === 'groups' && isDict(value)) {
-        for (const [gname, gval] of Object.entries(value)) {
-          if (Object.hasOwn(merged.groups, gname) && isDict(gval)) Object.assign(merged.groups[gname], gval);
-        }
-      } else {
-        merged[key] = value;
-      }
-    }
-  }
-  return merged as unknown as HealthSettings;
+const mergeGroup = (base: HealthGroup, over: Record<string, unknown>): HealthGroup => {
+  const group: HealthGroup = {
+    role_id: or(over.role_id, isStringOrNull, base.role_id),
+    reminder_topics: or(over.reminder_topics, isStrings, base.reminder_topics),
+    fact_topics: or(over.fact_topics, isStrings, base.fact_topics),
+    color: or(over.color, isNumberOrNull, base.color),
+  };
+  if (isString(over.start_time)) group.start_time = over.start_time;
+  if (isNumber(over.interval_hours)) group.interval_hours = over.interval_hours;
+  return group;
+};
+
+const mergeSettings = (data: unknown): HealthSettings => {
+  const base = structuredClone(DEFAULT_SETTINGS);
+  if (!isRecord(data)) return base;
+  const groups = isRecord(data.groups) ? data.groups : {};
+  return {
+    channel_id: or(data.channel_id, isStringOrNull, base.channel_id),
+    timezone: or(data.timezone, isString, base.timezone),
+    start_time: or(data.start_time, isString, base.start_time),
+    interval_hours: or(data.interval_hours, isNumber, base.interval_hours),
+    enabled: or(data.enabled, isBoolean, base.enabled),
+    groups: Object.fromEntries(
+      Object.entries(base.groups).map(([name, g]): [string, HealthGroup] => {
+        const over = Object.hasOwn(groups, name) ? groups[name] : undefined;
+        return [name, isRecord(over) ? mergeGroup(g, over) : g];
+      }),
+    ),
+  };
 };
 
 const cache = new Map<string, HealthSettings>();
@@ -109,7 +132,7 @@ export const saveSettings = (guildId: string, s: HealthSettings): void => {
   db().setGuildSetting(guildId, MODULE, SETTINGS_KEY, s);
 };
 
-export const hasStoredSettings = (guildId: string): boolean => db().getGuildSetting(guildId, MODULE, SETTINGS_KEY) !== undefined;
+const hasStoredSettings = (guildId: string): boolean => db().getGuildSetting(guildId, MODULE, SETTINGS_KEY) !== undefined;
 
 export const guildsWithStoredSettings = (): string[] => db().guildsWithSettings(MODULE).filter(hasStoredSettings);
 

@@ -1,4 +1,5 @@
 import {db} from '../../db';
+import {isRecord} from '../../util';
 import {DEFAULT_FORMAT, Resolved, resolveMemberFormat, resolveSetting} from './format';
 import {AutoproxySetting, parseAutoproxy} from './match';
 
@@ -12,10 +13,8 @@ const USER_FORMAT = 'proxy:format';
 const USER_SYS_TAG = 'proxy:systag';
 const USER_MEMBER_FORMATS = 'proxy:memberFormats';
 
-const memberFormats = (v: unknown): Record<string, string> =>
-  v && typeof v === 'object' && !Array.isArray(v)
-    ? Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string' && !!e[1].trim()))
-    : {};
+const memberFormats = (v: unknown): Map<string, string> =>
+  new Map(isRecord(v) ? Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string' && !!e[1].trim()) : []);
 
 export const getAutoproxy = (guildId: string, userId: string): AutoproxySetting | null =>
   parseAutoproxy(db().getGuildSetting(guildId, MODULE, autoproxyKey(userId)));
@@ -26,7 +25,7 @@ export const setAutoproxy = (guildId: string, userId: string, value: AutoproxySe
 };
 
 export const getLogChannel = (guildId: string): string | null => {
-  const v = db().getGuildSetting<unknown>(guildId, MODULE, LOG_CHANNEL);
+  const v = db().getGuildSetting(guildId, MODULE, LOG_CHANNEL);
   return typeof v === 'string' && v ? v : null;
 };
 
@@ -40,48 +39,47 @@ export interface NameSettings {
   sysTag: Resolved;
 }
 
+const serverValue = (guildId: string | null, key: string): unknown => (guildId ? db().getGuildSetting(guildId, MODULE, key) : undefined);
+
+const scopedValue = (guildId: string | null, userId: string, guildKey: string, userKey: string): unknown =>
+  guildId ? db().getGuildSetting(guildId, MODULE, guildKey) : db().getUserSetting(userId, userKey);
+
+const setScoped = (guildId: string | null, userId: string, guildKey: string, userKey: string, value: unknown): void => {
+  const d = db();
+  if (guildId) {
+    if (value) d.setGuildSetting(guildId, MODULE, guildKey, value);
+    else d.deleteGuildSetting(guildId, MODULE, guildKey);
+  } else if (value) d.setUserSetting(userId, userKey, value);
+  else d.deleteUserSetting(userId, userKey);
+};
+
 export const getNameSettings = (guildId: string | null, userId: string, memberId?: string): NameSettings => {
   const d = db();
-  const general = resolveSetting(guildId ? d.getGuildSetting(guildId, MODULE, formatKey(userId)) : undefined, d.getUserSetting(userId, USER_FORMAT), DEFAULT_FORMAT);
+  const general = resolveSetting(serverValue(guildId, formatKey(userId)), d.getUserSetting(userId, USER_FORMAT), DEFAULT_FORMAT);
   return {
     format: memberId
       ? resolveMemberFormat(
-          guildId ? memberFormats(d.getGuildSetting(guildId, MODULE, memberFormatsKey(userId)))[memberId] : undefined,
-          memberFormats(d.getUserSetting(userId, USER_MEMBER_FORMATS))[memberId],
+          memberFormats(serverValue(guildId, memberFormatsKey(userId))).get(memberId),
+          memberFormats(d.getUserSetting(userId, USER_MEMBER_FORMATS)).get(memberId),
           general,
         )
       : general,
-    sysTag: resolveSetting(guildId ? d.getGuildSetting(guildId, MODULE, sysTagKey(userId)) : undefined, d.getUserSetting(userId, USER_SYS_TAG), ''),
+    sysTag: resolveSetting(serverValue(guildId, sysTagKey(userId)), d.getUserSetting(userId, USER_SYS_TAG), ''),
   };
 };
 
-export const setNameFormat = (guildId: string | null, userId: string, template: string | null): void => {
-  if (guildId) {
-    if (template) db().setGuildSetting(guildId, MODULE, formatKey(userId), template);
-    else db().deleteGuildSetting(guildId, MODULE, formatKey(userId));
-  } else if (template) db().setUserSetting(userId, USER_FORMAT, template);
-  else db().deleteUserSetting(userId, USER_FORMAT);
-};
+export const setNameFormat = (guildId: string | null, userId: string, template: string | null): void =>
+  setScoped(guildId, userId, formatKey(userId), USER_FORMAT, template);
 
 export const setMemberFormat = (guildId: string | null, userId: string, memberId: string, template: string | null): void => {
-  const current = memberFormats(guildId ? db().getGuildSetting(guildId, MODULE, memberFormatsKey(userId)) : db().getUserSetting(userId, USER_MEMBER_FORMATS));
-  const next = Object.fromEntries(Object.entries(current).filter(([id]) => id !== memberId));
-  if (template) next[memberId] = template;
-  const keep = Object.keys(next).length > 0;
-  if (guildId) {
-    if (keep) db().setGuildSetting(guildId, MODULE, memberFormatsKey(userId), next);
-    else db().deleteGuildSetting(guildId, MODULE, memberFormatsKey(userId));
-  } else if (keep) db().setUserSetting(userId, USER_MEMBER_FORMATS, next);
-  else db().deleteUserSetting(userId, USER_MEMBER_FORMATS);
+  const next = memberFormats(scopedValue(guildId, userId, memberFormatsKey(userId), USER_MEMBER_FORMATS));
+  next.delete(memberId);
+  if (template) next.set(memberId, template);
+  setScoped(guildId, userId, memberFormatsKey(userId), USER_MEMBER_FORMATS, next.size > 0 ? Object.fromEntries(next) : null);
 };
 
-export const setSysTag = (guildId: string | null, userId: string, sysTag: string | null): void => {
-  if (guildId) {
-    if (sysTag) db().setGuildSetting(guildId, MODULE, sysTagKey(userId), sysTag);
-    else db().deleteGuildSetting(guildId, MODULE, sysTagKey(userId));
-  } else if (sysTag) db().setUserSetting(userId, USER_SYS_TAG, sysTag);
-  else db().deleteUserSetting(userId, USER_SYS_TAG);
-};
+export const setSysTag = (guildId: string | null, userId: string, sysTag: string | null): void =>
+  setScoped(guildId, userId, sysTagKey(userId), USER_SYS_TAG, sysTag);
 
 export const forgetNameSettings = (userId: string): void => {
   db().deleteUserSetting(userId, USER_FORMAT);

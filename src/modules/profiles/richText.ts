@@ -1,32 +1,11 @@
 import {truncateUnits} from '../proxy/text';
+import {Block, Inline, isSafeHref, parseRichText} from '../../markdown/parse';
 
 export type MentionNames = (memberId: string) => string | undefined;
 
-const MENTION_RE = /@\[([^\]]+)\]\(member:([a-zA-Z0-9_-]+)\)/g;
 const URL_RE = /https?:\/\/[^\s<]+/g;
 
-export const isHTML = (text: string): boolean => {
-  const t = text.trim();
-  if (/^<(?:img|br)\b/i.test(t)) {
-    return /<(?:p|h[1-6]|div|ul|ol|blockquote|pre|hr|strong|em|b|i|s|del|code|a)\b/i.test(t);
-  }
-  return /<(?:p|h[1-6]|div|ul|ol|blockquote|pre|hr|strong|em|b|i|s|del|code|a)\b/i.test(t);
-};
-
-const NAMED_ENTITIES: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' '};
-
-const decodeEntities = (s: string): string =>
-  s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
-    if (body[0] === '#') {
-      const cp = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-      if (!Number.isFinite(cp) || cp <= 0 || cp > 0x10ffff) return whole;
-      return cp === 0xa0 ? ' ' : String.fromCodePoint(cp);
-    }
-    const named = NAMED_ENTITIES[body.toLowerCase()];
-    return named ?? whole;
-  });
-
-const escapeRun = (s: string): string => s.replace(/[\\*_~`[\]<>#-]/g, '\\$&').replace(/(\d)\.(?=\s|$)/g, '$1\\.');
+const escapeRun = (s: string): string => s.replace(/[\\*_~`[\]<>#|-]/g, '\\$&').replace(/(\d)\.(?=\s|$)/g, '$1\\.');
 
 export const escapeText = (s: string): string => {
   let out = '';
@@ -39,148 +18,65 @@ export const escapeText = (s: string): string => {
   return out + escapeRun(s.slice(last));
 };
 
-const withMentions = (text: string, names: MentionNames | undefined, plain: (s: string) => string): string => {
-  let out = '';
-  let last = 0;
-  for (const m of text.matchAll(MENTION_RE)) {
-    const at = m.index ?? 0;
-    out += plain(text.slice(last, at));
-    out += '@' + escapeText(names?.(m[2]) || m[1]);
-    last = at + m[0].length;
-  }
-  return out + plain(text.slice(last));
-};
-
-interface El {
-  tag: string;
-  attrs: string;
-  children: Node[];
-}
-type Node = string | El;
-
-const VOID = new Set(['br', 'img', 'hr', 'input', 'meta', 'link', 'wbr', 'col', 'area', 'base', 'source', 'track', 'embed', 'param']);
-const DROP = new Set(['script', 'style', 'head', 'title', 'template']);
-const BLOCK = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'ul', 'ol', 'li', 'hr', 'table', 'tr', 'section', 'article', 'header', 'footer']);
-const MARK: Record<string, string> = {b: '**', strong: '**', i: '*', em: '*', u: '__', ins: '__', s: '~~', strike: '~~', del: '~~'};
-
-const parseHtml = (html: string): El => {
-  const root: El = {tag: '#root', attrs: '', children: []};
-  const stack: El[] = [root];
-  const top = (): El => stack[stack.length - 1];
-  const re = /<!--[\s\S]*?-->|<\/?([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
-  let last = 0;
-  for (const m of html.matchAll(re)) {
-    const at = m.index ?? 0;
-    if (at > last) top().children.push(html.slice(last, at));
-    last = at + m[0].length;
-    if (m[0].startsWith('<!--')) continue;
-    const tag = m[1].toLowerCase();
-    if (m[0][1] === '/') {
-      for (let k = stack.length - 1; k > 0; k--) {
-        if (stack[k].tag === tag) {
-          stack.length = k;
-          break;
-        }
-      }
-      continue;
-    }
-    const el: El = {tag, attrs: m[2] || '', children: []};
-    top().children.push(el);
-    if (!VOID.has(tag) && !/\/\s*$/.test(el.attrs)) stack.push(el);
-  }
-  if (last < html.length) top().children.push(html.slice(last));
-  return root;
-};
-
-const SOFT = String.fromCharCode(0);
-const BREAKS = new RegExp(`[${SOFT}\\n]+`, 'g');
-const EDGE_BREAKS = new RegExp(`^[${SOFT}\\n]+|[${SOFT}\\n]+$`, 'g');
-
-interface Ctx {
-  names?: MentionNames;
-  lists: {ordered: boolean; n: number}[];
-}
-
-const attr = (attrs: string, name: string): string => {
-  const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(attrs);
-  return decodeEntities(m ? (m[1] ?? m[2] ?? m[3] ?? '') : '').trim();
-};
-
 const wrapLines = (s: string, mark: string): string =>
-  s.replace(/[^\n\u0000]+/g, piece => {
-    const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(piece)!;
-    return m[2] ? `${m[1]}${mark}${m[2]}${mark}${m[3]}` : piece;
+  s.replace(/[^\n]+/g, piece => {
+    const body = piece.trim();
+    if (!body) return piece;
+    const lead = piece.length - piece.trimStart().length;
+    return piece.slice(0, lead) + mark + body + mark + piece.slice(lead + body.length);
   });
 
 const linkTarget = (href: string): string | null => {
-  if (!/^(https?:\/\/|mailto:)/i.test(href)) return null;
-  return href.replace(/[\s()<>]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+  if (!isSafeHref(href)) return null;
+  return href.trim().replace(/[\s()<>]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
 };
 
-const renderChildren = (el: El, ctx: Ctx): string => el.children.map(c => renderNode(c, ctx)).join('');
+const oneLine = (s: string): string => s.replace(/\n+/g, ' ').trim();
 
-const renderNode = (node: Node, ctx: Ctx): string => {
-  if (typeof node === 'string') return withMentions(decodeEntities(node), ctx.names, escapeText);
-  const tag = node.tag;
-  if (DROP.has(tag)) return '';
-  if (tag === 'br') return '\n';
-  if (tag === 'img') return '';
-  if (tag === 'hr') return SOFT;
-  if (tag === 'td' || tag === 'th') return ' ' + renderChildren(node, ctx) + ' ';
-  const mark = MARK[tag];
-  if (mark) return wrapLines(renderChildren(node, ctx), mark);
-  if (tag === 'a') {
-    const inner = renderChildren(node, ctx).replace(BREAKS, ' ').trim();
-    const href = attr(node.attrs, 'href');
-    const target = linkTarget(href);
-    if (!target) return inner;
-    if (!inner || inner === escapeText(href) || inner === href) return target;
-    return `[${inner}](${target})`;
+const inlineToDiscord = (nodes: Inline[], names?: MentionNames): string =>
+  nodes.map(n => {
+    switch (n.kind) {
+      case 'text': return escapeText(n.text);
+      case 'break': return '\n';
+      case 'mention': return '@' + escapeText(names?.(n.memberId) || n.name);
+      case 'code': return n.text.includes('`') ? escapeText(n.text) : '`' + n.text + '`';
+      case 'bold': return wrapLines(inlineToDiscord(n.children, names), '**');
+      case 'italic': return wrapLines(inlineToDiscord(n.children, names), '*');
+      case 'boldItalic': return wrapLines(inlineToDiscord(n.children, names), '***');
+      case 'underline': return wrapLines(inlineToDiscord(n.children, names), '__');
+      case 'strike': return wrapLines(inlineToDiscord(n.children, names), '~~');
+      case 'spoiler': return wrapLines(inlineToDiscord(n.children, names), '||');
+      case 'image': return '';
+      case 'link': {
+        const inner = oneLine(inlineToDiscord(n.children, names));
+        const target = linkTarget(n.href);
+        if (!target) return inner;
+        if (!inner || inner === escapeText(n.href) || inner === n.href) return target;
+        return `[${inner}](${target})`;
+      }
+    }
+  }).join('');
+
+const blockToDiscord = (b: Block, names?: MentionNames): string => {
+  switch (b.kind) {
+    case 'paragraph': return inlineToDiscord(b.children, names);
+    case 'heading': return '#'.repeat(b.level) + ' ' + oneLine(inlineToDiscord(b.children, names));
+    case 'quote': return inlineToDiscord(b.children, names).split('\n').map(line => '> ' + line).join('\n');
+    case 'list':
+      return b.items
+        .map(item => '  '.repeat(item.depth) + (item.ordered ? `${item.n}. ` : '• ') + oneLine(inlineToDiscord(item.children, names)))
+        .join('\n');
+    case 'code': return '```\n' + b.text.replace(/```/g, '`\u200b``') + '\n```';
+    case 'aside': return b.children.map(c => blockToDiscord(c, names)).filter(Boolean).join('\n');
+    case 'rule':
+    case 'blank':
+    case 'image':
+      return '';
   }
-  if (tag === 'ul' || tag === 'ol') {
-    ctx.lists.push({ordered: tag === 'ol', n: 0});
-    const body = renderChildren(node, ctx);
-    ctx.lists.pop();
-    return SOFT + body + SOFT;
-  }
-  if (tag === 'li') {
-    const list = ctx.lists[ctx.lists.length - 1];
-    const depth = Math.max(0, ctx.lists.length - 1);
-    let bullet = '• ';
-    if (list?.ordered) bullet = `${++list.n}. `;
-    return SOFT + '  '.repeat(depth) + bullet + renderChildren(node, ctx).replace(EDGE_BREAKS, '') + SOFT;
-  }
-  if (BLOCK.has(tag)) return SOFT + renderChildren(node, ctx) + SOFT;
-  return renderChildren(node, ctx);
 };
 
 const finish = (s: string): string =>
   s
-    .replace(EDGE_BREAKS, '')
-    .replace(BREAKS, run => {
-      const hard = run.split('\n').length - 1;
-      const soft = run.length - hard;
-      const lines = soft > 0 ? Math.max(1, hard + 1) : hard;
-      return '\n'.repeat(Math.min(2, lines));
-    })
-    .split('\n')
-    .map(line => line.replace(/\s+$/, ''))
-    .join('\n')
-    .trim();
-
-export const htmlToMarkdown = (html: string, names?: MentionNames): string =>
-  finish(renderNode(parseHtml(html.replace(/[\r\n]/g, '')), {names, lists: []}));
-
-export const markdownToDiscord = (text: string, names?: MentionNames): string =>
-  withMentions(
-    text
-      .replace(/<img\s[^>]*>/gi, '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/\r\n?|\u2028|\u2029/g, '\n')
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, ''),
-    names,
-    s => s,
-  )
     .split('\n')
     .map(line => line.replace(/\s+$/, ''))
     .join('\n')
@@ -189,7 +85,7 @@ export const markdownToDiscord = (text: string, names?: MentionNames): string =>
 
 export const descriptionToDiscord = (text: unknown, names?: MentionNames): string => {
   if (typeof text !== 'string' || !text.trim()) return '';
-  return isHTML(text) ? htmlToMarkdown(text, names) : markdownToDiscord(text, names);
+  return finish(parseRichText(text).map(b => blockToDiscord(b, names)).join('\n'));
 };
 
 export const capText = (s: string, max: number): string => {

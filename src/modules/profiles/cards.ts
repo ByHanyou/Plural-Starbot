@@ -1,17 +1,18 @@
-import {ActionRowBuilder, type APIEmbed, type APIEmbedField, ButtonBuilder, ButtonStyle, ContainerBuilder} from 'discord.js';
+import {ActionRowBuilder, type APIEmbed, type APIEmbedField, ButtonBuilder, ContainerBuilder} from 'discord.js';
 import type {AppSettings, CustomFieldDef, FrontState, FrontTier, Member, MemberGroup, SystemInfo} from '../../vault/types';
-import {ellipsize, embedColor} from '../proxy/text';
+import {isRosterMember} from '../../vault/types';
+import {ellipsize, embedColor, EMBED_LIMIT} from '../proxy/text';
 import {fmtDur, frontSessionStart, nameCompare, orderFronters, tierName, TIER_ORDER, translateMood} from './frontLogic';
-import {isRosterMember, visibleMembers} from './lookup';
+import {visibleMembers} from './lookup';
+import {parseFieldDate, parseFieldRange} from '../../vault/fieldDates';
 import {capText, descriptionToDiscord, escapeText, MentionNames} from './richText';
-
-const LIMIT = {title: 256, description: 4096, fields: 25, fieldName: 256, fieldValue: 1024, footer: 2048, author: 256, total: 6000};
+import {pagerRow} from '../pager';
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 const field = (name: string, value: string, inline = false): APIEmbedField | null => {
   if (!value.trim()) return null;
-  return {name: ellipsize(name.trim() || '-', LIMIT.fieldName), value: capText(value, LIMIT.fieldValue), inline};
+  return {name: ellipsize(name.trim() || '-', EMBED_LIMIT.fieldName), value: capText(value, EMBED_LIMIT.fieldValue), inline};
 };
 
 const embedLength = (e: APIEmbed): number =>
@@ -24,7 +25,7 @@ const embedLength = (e: APIEmbed): number =>
 const fitFields = (e: APIEmbed, reserve = 0, keepLast = 0): number => {
   const fields = e.fields || [];
   let dropped = 0;
-  while (fields.length && (fields.length > LIMIT.fields || embedLength(e) + reserve > LIMIT.total)) {
+  while (fields.length && (fields.length > EMBED_LIMIT.fields || embedLength(e) + reserve > EMBED_LIMIT.total)) {
     fields.splice(fields.length > keepLast ? fields.length - 1 - keepLast : fields.length - 1, 1);
     dropped++;
   }
@@ -33,8 +34,6 @@ const fitFields = (e: APIEmbed, reserve = 0, keepLast = 0): number => {
 };
 
 const notShown = (dropped: number): string => (dropped ? `${dropped} more field${dropped === 1 ? '' : 's'} not shown` : '');
-
-const bannerEmbed = (url: string, color: number | null): APIEmbed => (color !== null ? {color, image: {url}} : {image: {url}});
 
 const chip = (s: string): string => (s.includes('`') ? escapeText(s) : '`' + s + '`');
 
@@ -73,22 +72,21 @@ const linkedSubsystemsOf = (groups: MemberGroup[], memberId: string): MemberGrou
   memberId ? groups.filter(g => groupKind(g) === 'subsystem' && g.linkedMemberId === memberId) : [];
 
 type DateMode = 'date' | 'datetime' | 'monthYear' | 'month' | 'year' | 'monthDay';
-const DATE_MODES: Record<string, DateMode> = {date: 'date', timestamp: 'datetime', monthYear: 'monthYear', month: 'month', year: 'year', monthDay: 'monthDay'};
+const DATE_MODES = new Map<string, DateMode>([
+  ['date', 'date'],
+  ['timestamp', 'datetime'],
+  ['monthYear', 'monthYear'],
+  ['month', 'month'],
+  ['year', 'year'],
+  ['monthDay', 'monthDay'],
+]);
 const LOCALE = 'en-US';
 
-const dateOf = (val: unknown): {date: Date; instant: boolean} => {
-  const bareNum = typeof val === 'number' ? val : typeof val === 'string' && val.trim() && Number.isFinite(Number(val)) ? Number(val) : NaN;
-  if (!Number.isNaN(bareNum) && Number.isInteger(bareNum) && bareNum >= 1000 && bareNum <= 9999) return {date: new Date(bareNum, 0, 1), instant: false};
-  if (typeof val === 'number' && Number.isFinite(val)) return {date: new Date(val), instant: true};
-  if (typeof val === 'string' && val) {
-    const asNum = Number(val);
-    const isoDate = val.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ]00:00(?::00(?:\.\d+)?)?Z?)?$/);
-    if (Number.isFinite(asNum) && asNum !== 0) return {date: new Date(asNum), instant: true};
-    if (isoDate) return {date: new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3])), instant: false};
-    const parsed = Date.parse(val);
-    return {date: Number.isFinite(parsed) ? new Date(parsed) : new Date(), instant: false};
-  }
-  return {date: new Date(), instant: false};
+const isInstant = (val: unknown): boolean => {
+  if (typeof val === 'number') return !(Number.isInteger(val) && val >= 1000 && val <= 9999);
+  if (typeof val !== 'string') return false;
+  const s = val.trim();
+  return /^-?\d+(\.\d+)?$/.test(s) && !/^\d{4}$/.test(s);
 };
 
 const fmtDate = (date: Date, mode: DateMode, instant: boolean): string => {
@@ -104,22 +102,18 @@ const fmtDate = (date: Date, mode: DateMode, instant: boolean): string => {
   return `<t:${Math.floor(date.getTime() / 1000)}:f>`;
 };
 
-export const customFieldText = (fd: CustomFieldDef, val: unknown, names?: MentionNames): string | null => {
+const customFieldText = (fd: CustomFieldDef, val: unknown, names?: MentionNames): string | null => {
   if (val === undefined || val === null || val === '') return null;
-  const mode = DATE_MODES[fd.type];
+  const mode = DATE_MODES.get(fd.type);
   if (mode) {
-    const d = dateOf(val);
-    return fmtDate(d.date, mode, d.instant) || null;
+    const d = parseFieldDate(val);
+    return d ? fmtDate(d, mode, isInstant(val)) || null : null;
   }
   if (fd.type === 'dateRange') {
-    let range = {start: Date.now(), end: Date.now()};
-    if (typeof val === 'string' && val) {
-      try {
-        const parsed = JSON.parse(val);
-        if (parsed && typeof parsed.start === 'number' && typeof parsed.end === 'number') range = parsed;
-      } catch {}
-    }
-    return `Start: ${fmtDate(new Date(range.start), 'date', true)}\nEnd: ${fmtDate(new Date(range.end), 'date', true)}`;
+    const range = parseFieldRange(val);
+    if (!range) return null;
+    const instant = typeof val === 'string' && val.trim().startsWith('{');
+    return `Start: ${fmtDate(range.start, 'date', instant)}\nEnd: ${fmtDate(range.end, 'date', instant)}`;
   }
   if (fd.type === 'toggle') return val ? 'On' : 'Off';
   if (fd.type === 'image') return '(image)';
@@ -148,6 +142,7 @@ export interface MemberCardInput {
   names?: MentionNames;
   avatarUrl?: string;
   bannerUrl?: string;
+  fieldImageUrl?: (fieldId: string) => string | undefined;
   ownerView?: boolean;
   page?: number;
   nav?: MemberCardNav;
@@ -156,6 +151,12 @@ export interface MemberCardInput {
 const LINKED_SUBSYSTEMS = '**Linked Sub-systems**';
 const DESCRIPTION_BIO = '**Description / Bio**';
 const CUSTOM_FIELDS = '**Custom Fields**';
+const IMAGE_NOT_SYNCED = '-# (image not in the cloud: turn on “Include full-size images” in the app)';
+
+interface CustomItem {
+  text: string;
+  imageUrl?: string;
+}
 
 export const MEMBER_PAGE_ID = 'profiles:member-page:';
 const PAGE_LABEL_ID = 'profiles:member-page-label';
@@ -171,7 +172,7 @@ export const parseMemberPageId = (customId: string): MemberPageRef | null => {
   return m ? {page: Number(m[1]), ownerId: m[2], privateView: m[3] === '1', ownerView: m[4] === '1', memberId: m[5]} : null;
 };
 
-const heading = (name: string): string => `## ${escapeText(ellipsize(name, LIMIT.title))}`;
+const heading = (name: string): string => `## ${escapeText(ellipsize(name, EMBED_LIMIT.title))}`;
 
 const textLength = (parts: string[]): number => parts.reduce((n, s) => n + s.length, 0);
 
@@ -198,31 +199,33 @@ const addHeader = (box: ContainerBuilder, text: string, avatarUrl: string | unde
     addText(box, text);
     return;
   }
-  const url = avatarUrl;
-  box.addSectionComponents(s => s.addTextDisplayComponents(t => t.setContent(text)).setThumbnailAccessory(a => a.setURL(url)));
+  box.addSectionComponents(s => s.addTextDisplayComponents(t => t.setContent(text)).setThumbnailAccessory(a => a.setURL(avatarUrl)));
 };
 
 const addBanner = (box: ContainerBuilder, bannerUrl: string | undefined): void => {
   if (!bannerUrl) return;
-  const url = bannerUrl;
-  box.addMediaGalleryComponents(g => g.addItems(item => item.setURL(url)));
+  box.addMediaGalleryComponents(g => g.addItems(item => item.setURL(bannerUrl)));
 };
 
-const pageFields = (items: string[]): string[][] => {
+const pageFields = (items: CustomItem[]): CustomItem[][] => {
   const perPage = V2_LIMIT.components - FIELD_PAGE_FRAME;
   const budget = V2_LIMIT.text - CUSTOM_FIELDS.length;
-  const pages: string[][] = [];
-  let page: string[] = [];
+  const pages: CustomItem[][] = [];
+  let page: CustomItem[] = [];
   let used = 0;
+  let slots = 0;
   for (const item of items) {
-    const text = capText(item, budget);
-    if (page.length && (page.length >= perPage || used + text.length > budget)) {
+    const text = capText(item.text, budget);
+    const need = item.imageUrl ? 2 : 1;
+    if (page.length && (slots + need > perPage || used + text.length > budget)) {
       pages.push(page);
       page = [];
       used = 0;
+      slots = 0;
     }
-    page.push(text);
+    page.push({text, imageUrl: item.imageUrl});
     used += text.length;
+    slots += need;
   }
   if (page.length) pages.push(page);
   return pages;
@@ -239,11 +242,7 @@ const navRow = (
   const prev = memberPageId(Math.max(0, page - 1), nav, ownerView, memberId);
   const next = memberPageId(Math.min(pages - 1, page + 1), nav, ownerView, memberId);
   if (prev.length > V2_LIMIT.customId || next.length > V2_LIMIT.customId) return null;
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(prev).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-    new ButtonBuilder().setCustomId(PAGE_LABEL_ID).setLabel(`Page ${page + 1} of ${pages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
-    new ButtonBuilder().setCustomId(next).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page === pages - 1),
-  );
+  return pagerRow({prev, label: PAGE_LABEL_ID, next}, page, pages);
 };
 
 export const memberCard = (i: MemberCardInput): CardComponents => {
@@ -282,12 +281,20 @@ export const memberCard = (i: MemberCardInput): CardComponents => {
   }
   const bio = descriptionToDiscord(m.description, i.names);
 
-  const custom: string[] = [];
+  const custom: CustomItem[] = [];
   const values = Array.isArray(m.customFields) ? m.customFields : [];
   for (const fd of Array.isArray(i.fieldDefs) ? i.fieldDefs : []) {
     if (!fd || typeof fd !== 'object' || typeof fd.id !== 'string') continue;
-    const text = customFieldText(fd, values.find(v => v && v.fieldId === fd.id)?.value, i.names);
-    if (text && text.trim()) custom.push(`**${escapeText(ellipsize(str(fd.name) || '-', LIMIT.fieldName))}**\n${text}`);
+    const value = values.find(v => v && v.fieldId === fd.id)?.value;
+    const label = `**${escapeText(ellipsize(str(fd.name) || '-', EMBED_LIMIT.fieldName))}**`;
+    if (fd.type === 'image') {
+      if (value === undefined || value === null || value === '') continue;
+      const url = i.fieldImageUrl?.(fd.id);
+      custom.push(url ? {text: label, imageUrl: url} : {text: `${label}\n${IMAGE_NOT_SYNCED}`});
+      continue;
+    }
+    const text = customFieldText(fd, value, i.names);
+    if (text && text.trim()) custom.push({text: `${label}\n${text}`});
   }
 
   const fieldPages = pageFields(custom);
@@ -298,7 +305,10 @@ export const memberCard = (i: MemberCardInput): CardComponents => {
 
   if (page > 0) {
     addText(box, CUSTOM_FIELDS);
-    for (const text of fieldPages[page - 1]) addText(box, text);
+    for (const item of fieldPages[page - 1]) {
+      addText(box, item.text);
+      addBanner(box, item.imageUrl);
+    }
   } else {
     const footer = [m.isFacet ? 'Facet' : '', nav ? '' : notShown(custom.length)].filter(Boolean).join(' · ');
     const [top, middle, subs, about, foot] = fitTexts(
@@ -324,7 +334,7 @@ export interface SystemCardInput {
   bannerUrl?: string;
 }
 
-export const publicRosterCount = (members: Member[]): number =>
+const publicRosterCount = (members: Member[]): number =>
   visibleMembers(members, false).filter(isRosterMember).length;
 
 export const systemCard = (i: SystemCardInput): CardComponents => {
@@ -391,12 +401,13 @@ export const frontView = (i: FrontViewInput): FrontView => {
   const allDetails = i.ownerView ?? i.own;
   const byId = new Map(visibleMembers(i.members, i.own).map(m => [m.id, m] as const));
   const sortMode = i.settings?.frontSortMode;
-  const customOrder = Array.isArray(i.settings?.frontCustomOrder) ? i.settings!.frontCustomOrder : undefined;
+  const savedOrder = i.settings?.frontCustomOrder;
+  const customOrder = Array.isArray(savedOrder) ? savedOrder : undefined;
   const tiers = TIER_ORDER.map(key => {
     const tier = front[key];
     const ids = Array.isArray(tier?.memberIds) ? tier.memberIds.filter(id => byId.has(id)) : [];
     const ordered = orderFronters(ids, sortMode, id => byId.get(id)?.name || '', customOrder);
-    return {key, tier, members: ordered.map(id => byId.get(id)!)};
+    return {key, tier, members: ordered.flatMap(id => byId.get(id) ?? [])};
   });
   if (tiers.every(t => t.members.length === 0)) return {embed: null, showsPrivate: false};
 
@@ -407,21 +418,21 @@ export const frontView = (i: FrontViewInput): FrontView => {
     if (!t.members.length) continue;
     if (t.members.some(m => m.private === true)) showsPrivate = true;
     const lines = t.members.map(m => `**${escapeText(str(m.name) || '?')}** · for ${fmtDur(since(m.id), now)}`);
-    fields.push({name: ellipsize(tierName(t.key, i.settings?.tierNames), LIMIT.fieldName), value: capLines(lines, LIMIT.fieldValue)});
+    fields.push({name: ellipsize(tierName(t.key, i.settings?.tierNames), EMBED_LIMIT.fieldName), value: capLines(lines, EMBED_LIMIT.fieldValue)});
     if (!allDetails && t.key !== 'primary') continue;
     const mood = translateMood(str(t.tier?.mood));
     const location = str(t.tier?.location);
     const energy = allDetails ? energyOf(t.tier) : '';
     const note = str(t.tier?.note);
-    if (mood) fields.push({name: 'Mood', value: capText(escapeText(mood), LIMIT.fieldValue), inline: true});
-    if (location) fields.push({name: 'Location', value: capText(escapeText(location), LIMIT.fieldValue), inline: true});
-    if (energy) fields.push({name: 'Energy', value: capText(energy, LIMIT.fieldValue), inline: true});
-    if (note) fields.push({name: 'Note', value: capText(escapeText(note), LIMIT.fieldValue)});
+    if (mood) fields.push({name: 'Mood', value: capText(escapeText(mood), EMBED_LIMIT.fieldValue), inline: true});
+    if (location) fields.push({name: 'Location', value: capText(escapeText(location), EMBED_LIMIT.fieldValue), inline: true});
+    if (energy) fields.push({name: 'Energy', value: capText(energy, EMBED_LIMIT.fieldValue), inline: true});
+    if (note) fields.push({name: 'Note', value: capText(escapeText(note), EMBED_LIMIT.fieldValue)});
   }
 
   const start = frontSessionStart(front, i.own ? undefined : id => byId.has(id));
   const e: APIEmbed = {
-    author: {name: ellipsize(str(i.systemName) || 'Unnamed System', LIMIT.author), ...(i.systemAvatarUrl ? {icon_url: i.systemAvatarUrl} : {})},
+    author: {name: ellipsize(str(i.systemName) || 'Unnamed System', EMBED_LIMIT.author), ...(i.systemAvatarUrl ? {icon_url: i.systemAvatarUrl} : {})},
     title: 'Currently Fronting',
     fields,
   };

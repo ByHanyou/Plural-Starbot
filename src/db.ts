@@ -2,11 +2,12 @@ import Database from 'better-sqlite3';
 import {chmodSync, existsSync, mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import type {CloudLinkState} from './cloud/cloudTypes';
+import {tunables} from './config';
 import {log} from './log';
+import {errorText} from './util';
 
-export const PROXIED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const PURGE_INTERVAL_MS = 60 * 60 * 1000;
-export const DB_FILE_NAME = 'starbot.db';
+const retentionMs = (): number => tunables().proxiedRetentionDays * 24 * 60 * 60 * 1000;
+const DB_FILE_NAME = 'starbot.db';
 
 export interface ProxiedMessage {
   messageId: string;
@@ -40,6 +41,15 @@ const toProxied = (r: ProxiedRow | undefined): ProxiedMessage | null =>
         timestamp: r.created_at,
       }
     : null;
+
+const parseStored = <T>(raw: string, what: string): T | undefined => {
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    log.warn('Stored %s is unreadable: %s', what, errorText(e));
+    return undefined;
+  }
+};
 
 const MIGRATIONS: string[] = [
   `CREATE TABLE links (
@@ -75,7 +85,7 @@ const MIGRATIONS: string[] = [
    );`,
 ];
 
-export class StarbotDb {
+class StarbotDb {
   readonly path: string;
   private db: Database.Database;
 
@@ -108,13 +118,7 @@ export class StarbotDb {
 
   getLink(userId: string): CloudLinkState | null {
     const row = this.db.prepare('SELECT state FROM links WHERE user_id = ?').get(userId) as {state: string} | undefined;
-    if (!row) return null;
-    try {
-      return JSON.parse(row.state) as CloudLinkState;
-    } catch {
-      log.error('Stored vault link for user %s is unreadable.', userId);
-      return null;
-    }
+    return row ? parseStored<CloudLinkState>(row.state, `vault link for user ${userId}`) ?? null : null;
   }
 
   saveLink(userId: string, state: CloudLinkState | null): void {
@@ -140,16 +144,11 @@ export class StarbotDb {
     return (this.db.prepare('SELECT user_id FROM links ORDER BY user_id').all() as {user_id: string}[]).map(r => r.user_id);
   }
 
-  getGuildSetting<T = unknown>(guildId: string, module: string, key: string): T | undefined {
+  getGuildSetting(guildId: string, module: string, key: string): unknown {
     const row = this.db
       .prepare('SELECT value FROM guild_settings WHERE guild_id = ? AND module = ? AND key = ?')
       .get(guildId, module, key) as {value: string} | undefined;
-    if (!row) return undefined;
-    try {
-      return JSON.parse(row.value) as T;
-    } catch {
-      return undefined;
-    }
+    return row ? parseStored(row.value, `${module} setting ${key} for server ${guildId}`) : undefined;
   }
 
   setGuildSetting(guildId: string, module: string, key: string, value: unknown): void {
@@ -167,20 +166,6 @@ export class StarbotDb {
 
   deleteGuildSetting(guildId: string, module: string, key: string): boolean {
     return this.db.prepare('DELETE FROM guild_settings WHERE guild_id = ? AND module = ? AND key = ?').run(guildId, module, key).changes > 0;
-  }
-
-  guildSettings(guildId: string, module: string): Record<string, unknown> {
-    const rows = this.db.prepare('SELECT key, value FROM guild_settings WHERE guild_id = ? AND module = ?').all(guildId, module) as {
-      key: string;
-      value: string;
-    }[];
-    const out: Record<string, unknown> = {};
-    for (const r of rows) {
-      try {
-        out[r.key] = JSON.parse(r.value);
-      } catch {}
-    }
-    return out;
   }
 
   guildsWithSettings(module: string): string[] {
@@ -202,14 +187,9 @@ export class StarbotDb {
     return this.db.prepare('DELETE FROM guild_settings WHERE module = ? AND key = ?').run(module, key).changes;
   }
 
-  getUserSetting<T = unknown>(userId: string, key: string): T | undefined {
+  getUserSetting(userId: string, key: string): unknown {
     const row = this.db.prepare('SELECT value FROM user_settings WHERE user_id = ? AND key = ?').get(userId, key) as {value: string} | undefined;
-    if (!row) return undefined;
-    try {
-      return JSON.parse(row.value) as T;
-    } catch {
-      return undefined;
-    }
+    return row ? parseStored(row.value, `setting ${key} for user ${userId}`) : undefined;
   }
 
   setUserSetting(userId: string, key: string, value: unknown): void {
@@ -241,19 +221,12 @@ export class StarbotDb {
   proxiedByMessageId(messageId: string, now = Date.now()): ProxiedMessage | null {
     const row = this.db
       .prepare('SELECT * FROM proxied_messages WHERE message_id = ? AND created_at >= ?')
-      .get(messageId, now - PROXIED_RETENTION_MS) as ProxiedRow | undefined;
-    return toProxied(row);
-  }
-
-  proxiedByOriginalId(originalId: string, now = Date.now()): ProxiedMessage | null {
-    const row = this.db
-      .prepare('SELECT * FROM proxied_messages WHERE original_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1')
-      .get(originalId, now - PROXIED_RETENTION_MS) as ProxiedRow | undefined;
+      .get(messageId, now - retentionMs()) as ProxiedRow | undefined;
     return toProxied(row);
   }
 
   lastProxied(userId: string, channelId?: string, now = Date.now()): ProxiedMessage | null {
-    const since = now - PROXIED_RETENTION_MS;
+    const since = now - retentionMs();
     const row = channelId
       ? this.db
           .prepare('SELECT * FROM proxied_messages WHERE user_id = ? AND channel_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1')
@@ -265,7 +238,7 @@ export class StarbotDb {
   lastProxiedInGuild(userId: string, guildId: string, now = Date.now()): ProxiedMessage | null {
     const row = this.db
       .prepare('SELECT * FROM proxied_messages WHERE user_id = ? AND guild_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1')
-      .get(userId, guildId, now - PROXIED_RETENTION_MS) as ProxiedRow | undefined;
+      .get(userId, guildId, now - retentionMs()) as ProxiedRow | undefined;
     return toProxied(row);
   }
 
@@ -274,7 +247,7 @@ export class StarbotDb {
   }
 
   purgeProxied(now = Date.now()): number {
-    return this.db.prepare('DELETE FROM proxied_messages WHERE created_at < ?').run(now - PROXIED_RETENTION_MS).changes;
+    return this.db.prepare('DELETE FROM proxied_messages WHERE created_at < ?').run(now - retentionMs()).changes;
   }
 }
 
@@ -282,7 +255,7 @@ const restrictToOwner = (file: string): void => {
   try {
     if (existsSync(file)) chmodSync(file, 0o600);
   } catch (e) {
-    log.warn('Could not restrict the permissions of %s: %s', file, e instanceof Error ? e.message : String(e));
+    log.warn('Could not restrict the permissions of %s: %s', file, errorText(e));
   }
 };
 
@@ -309,13 +282,13 @@ export const startPurgeJob = (): (() => void) => {
   const run = (): void => {
     try {
       const n = db().purgeProxied();
-      if (n) log.info('Purged %d proxied-message record(s) older than 7 days.', n);
+      if (n) log.info('Purged %d proxied-message record(s) older than %d day(s).', n, tunables().proxiedRetentionDays);
     } catch (e) {
       log.exception(e, 'Proxied-message purge failed.');
     }
   };
   run();
-  const timer = setInterval(run, PURGE_INTERVAL_MS);
+  const timer = setInterval(run, tunables().purgeIntervalMs);
   timer.unref();
   return () => clearInterval(timer);
 };

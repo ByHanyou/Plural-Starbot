@@ -6,17 +6,22 @@ export const DEFAULT_FORMAT = '{Name}';
 export const FORMAT_MAX_LENGTH = WEBHOOK_NAME_LIMIT;
 export const SYS_TAG_MAX = 20;
 
-export type FormatTag = 'emoji' | 'name' | 'pronouns' | 'role' | 'systag';
+type FormatTag = 'emoji' | 'name' | 'pronouns' | 'role' | 'systag';
+
+const FORMAT_TAGS: readonly FormatTag[] = ['emoji', 'name', 'pronouns', 'role', 'systag'];
 
 const TAG_RE = /\{(emoji|name|pronouns|role|sys[ _]?tag)\}/gi;
 
-const tagOf = (raw: string): FormatTag => raw.toLowerCase().replace(/[ _]/g, '') as FormatTag;
+const tagOf = (raw: string): FormatTag | undefined => {
+  const key = raw.toLowerCase().replace(/[ _]/g, '');
+  return FORMAT_TAGS.find(t => t === key);
+};
 
 export const usesSysTag = (template: string): boolean => Array.from(template.matchAll(TAG_RE), m => tagOf(m[1])).includes('systag');
 
 const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-export const tagValues = (m: Member, sysTag: string): Record<FormatTag, string> => ({
+const tagValues = (m: Member, sysTag: string): Record<FormatTag, string> => ({
   emoji: text(m.emoji),
   name: displayNameOf(m),
   pronouns: text(m.pronouns),
@@ -56,7 +61,7 @@ const dropEmptyPairs = (atoms: Atom[]): Atom[] => {
   return atoms;
 };
 
-export const renderProxyName = (template: string, m: Member, sysTag = ''): string => {
+const renderProxyName = (template: string, m: Member, sysTag = ''): string => {
   const values = tagValues(m, sysTag);
   const atoms: Atom[] = [];
   const literal = (s: string): void => {
@@ -66,7 +71,8 @@ export const renderProxyName = (template: string, m: Member, sysTag = ''): strin
   for (const match of template.matchAll(TAG_RE)) {
     const start = match.index ?? 0;
     literal(template.slice(at, start));
-    const value = values[tagOf(match[1])];
+    const tag = tagOf(match[1]);
+    const value = tag ? values[tag] : '';
     atoms.push(value ? {k: 'value', s: value} : {k: 'gap'});
     at = start + match[0].length;
   }

@@ -7,7 +7,7 @@ where node >nul 2>nul
 if errorlevel 1 (
     echo.
     echo Node.js was not found on this computer.
-    echo Install it from https://nodejs.org/ ^(version 20 or newer; the installer
+    echo Install it from https://nodejs.org/ ^(version 24.7 or newer; the installer
     echo adds it to PATH^), then run this file again.
     echo.
     pause

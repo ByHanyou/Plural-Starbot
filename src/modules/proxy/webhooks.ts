@@ -3,6 +3,7 @@ import {
   ForumChannel,
   GuildTextBasedChannel,
   MediaChannel,
+  Message,
   NewsChannel,
   RESTJSONErrorCodes,
   StageChannel,
@@ -12,10 +13,9 @@ import {
   WebhookMessageCreateOptions,
   WebhookType,
 } from 'discord.js';
-import type {Message} from 'discord.js';
 import {log} from '../../log';
 
-export const WEBHOOK_NAME = 'Plural Starbot';
+const WEBHOOK_NAME = 'Plural Starbot';
 
 export type WebhookHost = TextChannel | NewsChannel | VoiceChannel | StageChannel | ForumChannel | MediaChannel;
 

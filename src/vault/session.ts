@@ -1,16 +1,14 @@
 import {EventEmitter} from 'node:events';
 import {CloudApi} from '../cloud/cloudApi';
-import {CloudError, CloudPhase, CloudTransport} from '../cloud/cloudTypes';
+import {CloudError, CloudPhase, CloudTransport, isCloudKind} from '../cloud/cloudTypes';
 import {CloudService} from '../cloud/cloudVault';
+import {tunables} from '../config';
 import {log} from '../log';
+import {errorText, isRecord} from '../util';
 import {LinkStore, MemoryPlatform} from './platform';
 import {linkSlots} from './throttle';
 import {VaultCreateRefused} from './transport';
-import {AppSettings, CustomFieldDef, FrontState, HistoryEntry, Member, MemberGroup, SystemInfo, VAULT_KEYS} from './types';
-
-export const CHECK_INTERVAL_MS = 2 * 60 * 1000;
-export const FRESH_MS = 30 * 1000;
-const SETTLE_TIMEOUT_MS = 20000;
+import {AppSettings, CustomFieldDef, FrontState, HistoryEntry, isRosterMember, MEDIA_PREFIX, Member, MemberGroup, SystemInfo, VAULT_KEYS} from './types';
 
 export type LinkStage = 'queued' | 'deriving' | 'looking-up' | 'opening' | 'importing';
 
@@ -32,10 +30,9 @@ export const LINK_BROKEN_TEXT =
 
 export const NO_DATA_TEXT = 'Your vault has no data yet. Finish the first backup in the Plural Star app.';
 
-const isDeadLink = (e: unknown): boolean =>
-  e instanceof CloudError && ((e.status === 404 && e.code === 'no vault') || (e.status === 401 && e.code === 'bad auth secret'));
+const isDeadLink = (e: unknown): boolean => isCloudKind(e, 'VAULT_MISSING', 'BAD_AUTH');
 
-const isRemovedDevice = (e: unknown): boolean => e instanceof CloudError && e.status === 401 && e.code === 'device unlinked';
+const isRemovedDevice = (e: unknown): boolean => isCloudKind(e, 'DEVICE_UNLINKED');
 
 export interface VaultSessionOptions {
   userId: string;
@@ -44,7 +41,7 @@ export interface VaultSessionOptions {
   transport?: CloudTransport;
 }
 
-const rosterCount = (members: Member[]): number => members.filter(m => !m.deleted && !m.archived && !m.isCustomFront && !m.isFacet).length;
+const rosterCount = (members: Member[]): number => members.filter(m => isRosterMember(m) && !m.archived).length;
 
 export class VaultSession extends EventEmitter {
   readonly userId: string;
@@ -58,6 +55,8 @@ export class VaultSession extends EventEmitter {
   private initPromise: Promise<void> | null = null;
   private hydrated = false;
   private broken: string | null = null;
+  private lastSyncOkAt = 0;
+  private lastSyncError: string | null = null;
 
   constructor(opts: VaultSessionOptions) {
     super();
@@ -98,6 +97,10 @@ export class VaultSession extends EventEmitter {
     return this.broken;
   }
 
+  syncState(): {okAt: number; error: string | null} {
+    return {okAt: this.lastSyncOkAt, error: this.broken ?? this.lastSyncError};
+  }
+
   isLinking(): boolean {
     return this.linking;
   }
@@ -108,13 +111,16 @@ export class VaultSession extends EventEmitter {
     try {
       await this.runSync('checking');
       this.hydrated = true;
+      this.lastSyncOkAt = Date.now();
+      this.lastSyncError = null;
       return true;
     } catch (e) {
-      const text = e instanceof Error ? e.message : String(e);
+      const text = errorText(e);
+      this.lastSyncError = text;
       if ((isDeadLink(e) && this.service.isLinked()) || isRemovedDevice(e)) {
         this.broken = text;
         this.stopTimer();
-        this.service['clearTimers']();
+        this.service.stop();
         log.warn('Vault link for user %s no longer works (%s); checks stopped until they unlink and link again.', this.userId, text);
       } else {
         log.warn('Vault check for user %s failed: %s', this.userId, text);
@@ -123,7 +129,7 @@ export class VaultSession extends EventEmitter {
     }
   }
 
-  async freshen(maxAgeMs = FRESH_MS): Promise<void> {
+  async freshen(maxAgeMs = tunables().vaultFreshMs): Promise<void> {
     await this.init();
     if (!this.service.isLinked()) return;
     if (!this.broken && Date.now() - this.lastCheckAt > maxAgeMs) await this.check();
@@ -141,7 +147,7 @@ export class VaultSession extends EventEmitter {
     if (!this.hasData()) throw new CloudError(0, 'no data', NO_DATA_TEXT);
     const raw: Record<string, string> = {};
     for (const k of Object.keys(values)) {
-      if (k.startsWith('ps:media:')) throw new Error(`Plural Starbot does not write media (${k}).`);
+      if (k.startsWith(MEDIA_PREFIX)) throw new Error(`Plural Starbot does not write media (${k}).`);
       raw[k] = JSON.stringify(values[k]);
     }
     this.platform.setLocal(raw);
@@ -149,7 +155,7 @@ export class VaultSession extends EventEmitter {
     return raw;
   }
 
-  async writeAndPush(values: Record<string, unknown>, timeoutMs = SETTLE_TIMEOUT_MS): Promise<PushResult> {
+  async writeAndPush(values: Record<string, unknown>, timeoutMs = tunables().vaultSettleTimeoutMs): Promise<PushResult> {
     const raw = this.write(values);
     await this.settle(timeoutMs);
     const known = this.platform.link()?.known || {};
@@ -157,11 +163,11 @@ export class VaultSession extends EventEmitter {
     const saved: string[] = [];
     for (const [k, v] of Object.entries(raw)) {
       if (this.platform.get(k) !== v) replaced.push(k);
-      else if (known[k]?.hash === (await this.service['keyHash'](k, v))) saved.push(k);
+      else if (known[k]?.hash === (await this.service.hashFor(k, v))) saved.push(k);
     }
     if (replaced.length) return {ok: false, reason: 'conflict', replaced, saved};
     if (saved.length === Object.keys(raw).length) return {ok: true};
-    const pending = !!(this.service['queued'] || this.service['syncing']);
+    const pending = this.service.isBusy();
     return {ok: false, reason: pending ? 'pending' : 'failed', error: this.service.status().lastError};
   }
 
@@ -171,8 +177,8 @@ export class VaultSession extends EventEmitter {
     if (this.linking) throw new CloudError(0, 'link in progress', 'Linking is already in progress.');
     this.linking = true;
     try {
-      if (linkSlots.busy()) await onStage?.('queued');
-      return await linkSlots.run(() => this.linkExisting(password, onStage));
+      if (linkSlots().busy()) await onStage?.('queued');
+      return await linkSlots().run(() => this.linkExisting(password, onStage));
     } finally {
       this.linking = false;
     }
@@ -189,7 +195,7 @@ export class VaultSession extends EventEmitter {
         .then(async () => {
           await onStage?.(stage);
         })
-        .catch(() => {});
+        .catch(e => log.debug('Could not report vault link stage %s: %s', stage, errorText(e)));
     };
     const off = this.service.subscribe(s => {
       if (s.phase === 'deriving' && s.progress >= 1) report('looking-up');
@@ -212,29 +218,31 @@ export class VaultSession extends EventEmitter {
     }
 
     await onStage?.('importing');
-    const pending = this.service['pendingCreds'];
+    const pending = this.service.pendingLink();
     try {
       await this.service.importExisting(true, true);
     } catch (e) {
       this.service.cancelPendingLink();
-      if (pending) await this.removeStaleDevice(pending, e, pending.deviceKey);
+      if (pending) await this.removeStaleDevice(pending, e);
       throw e;
     }
     this.lastCheckAt = Date.now();
     this.hydrated = true;
     this.broken = null;
+    this.lastSyncOkAt = Date.now();
+    this.lastSyncError = null;
     this.startTimer();
     return {kind: 'linked', systemName: this.system()?.name || '', memberCount: rosterCount(this.members())};
   }
 
-  private async removeStaleDevice(creds: {lookupId: string; authSecret: string}, cause: unknown, deviceKey?: string): Promise<void> {
-    if (cause instanceof CloudError && (cause.code === 'bad password' || cause.status === 401 || cause.status === 404)) return;
+  private async removeStaleDevice(creds: {lookupId: string; authSecret: string; deviceKey?: string}, cause: unknown): Promise<void> {
+    if (cause instanceof CloudError && (cause.kind === 'BAD_PASSWORD' || cause.status === 401 || cause.status === 404)) return;
     try {
-      const api = new CloudApi(this.cloudNodeUrl, '', this.platform.transport);
+      const api = new CloudApi(this.cloudNodeUrl, '', this.platform.transport, this.platform.limits());
       const sub = await this.platform.deviceSubId();
-      await api.unlinkDevice({lookupId: creds.lookupId, authSecret: creds.authSecret, deviceId: sub, deviceKey}, sub);
+      await api.unlinkDevice({lookupId: creds.lookupId, authSecret: creds.authSecret, deviceId: sub, deviceKey: creds.deviceKey}, sub);
     } catch (e) {
-      log.warn('Could not remove the Plural Starbot device after a failed link for user %s: %s', this.userId, e instanceof Error ? e.message : String(e));
+      log.warn('Could not remove the Plural Starbot device after a failed link for user %s: %s', this.userId, errorText(e));
     }
   }
 
@@ -243,6 +251,8 @@ export class VaultSession extends EventEmitter {
     this.stopTimer();
     this.hydrated = false;
     this.broken = null;
+    this.lastSyncOkAt = 0;
+    this.lastSyncError = null;
     if (!this.service.isLinked()) {
       this.links.save(this.userId, null);
       this.platform.clear();
@@ -269,9 +279,9 @@ export class VaultSession extends EventEmitter {
     this.stopTimer();
   }
 
-  async settle(timeoutMs = SETTLE_TIMEOUT_MS): Promise<void> {
+  async settle(timeoutMs = tunables().vaultSettleTimeoutMs): Promise<void> {
     await new Promise<void>(r => setTimeout(r, 0));
-    const pending = this.service['queued'] || this.service['syncing'];
+    const pending = this.service.pending();
     if (!pending) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([pending.catch(() => {}), new Promise<void>(r => (timer = setTimeout(r, timeoutMs)))]);
@@ -283,7 +293,8 @@ export class VaultSession extends EventEmitter {
     if (raw === undefined) return undefined;
     try {
       return JSON.parse(raw) as T;
-    } catch {
+    } catch (e) {
+      log.debug('Vault key %s of user %s is not valid JSON: %s', key, this.userId, errorText(e));
       return undefined;
     }
   }
@@ -293,9 +304,13 @@ export class VaultSession extends EventEmitter {
     return Array.isArray(v) ? (v as T[]) : [];
   }
 
+  private record<T extends object>(key: string): T | null {
+    const v = this.json<T>(key);
+    return isRecord(v) ? v : null;
+  }
+
   system(): SystemInfo | null {
-    const v = this.json<SystemInfo>(VAULT_KEYS.system);
-    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+    return this.record<SystemInfo>(VAULT_KEYS.system);
   }
 
   members(): Member[] {
@@ -303,8 +318,7 @@ export class VaultSession extends EventEmitter {
   }
 
   front(): FrontState | null {
-    const v = this.json<FrontState>(VAULT_KEYS.front);
-    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+    return this.record<FrontState>(VAULT_KEYS.front);
   }
 
   history(): HistoryEntry[] {
@@ -320,8 +334,7 @@ export class VaultSession extends EventEmitter {
   }
 
   settings(): AppSettings | null {
-    const v = this.json<AppSettings>(VAULT_KEYS.settings);
-    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+    return this.record<AppSettings>(VAULT_KEYS.settings);
   }
 
   mediaObjectId(key: string): string | undefined {
@@ -332,7 +345,7 @@ export class VaultSession extends EventEmitter {
     const known = this.platform.link()?.known;
     if (!known) return undefined;
     for (const k in known) {
-      if (known[k].id === id && k.startsWith('ps:media:')) return k;
+      if (known[k].id === id && k.startsWith(MEDIA_PREFIX)) return k;
     }
     return undefined;
   }
@@ -342,19 +355,15 @@ export class VaultSession extends EventEmitter {
     return v !== undefined && v.startsWith('data:') ? v : undefined;
   }
 
-  phase(): CloudPhase {
-    return this.service.status().phase;
-  }
-
   private runSync(phase: CloudPhase): Promise<void> {
-    return this.service['runSync'](phase);
+    return this.service.syncNow(phase);
   }
 
   private startTimer(): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
       if (this.service.isLinked()) void this.check();
-    }, CHECK_INTERVAL_MS);
+    }, tunables().vaultCheckIntervalMs);
   }
 
   private stopTimer(): void {

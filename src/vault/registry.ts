@@ -1,4 +1,5 @@
 import type {CloudTransport} from '../cloud/cloudTypes';
+import {tunables} from '../config';
 import {log} from '../log';
 import type {LinkStore} from './platform';
 import {VaultSession} from './session';
@@ -68,7 +69,7 @@ export const dropSession = (userId: string): void => {
   sessions.delete(userId);
 };
 
-export const loadAllSessions = async (concurrency = 4): Promise<number> => {
+export const loadAllSessions = async (concurrency = tunables().sessionLoadConcurrency): Promise<number> => {
   const ids = opts().links.userIds();
   let next = 0;
   let loaded = 0;
@@ -90,5 +91,5 @@ export const loadAllSessions = async (concurrency = 4): Promise<number> => {
 export const stopAllSessions = async (): Promise<void> => {
   const all = allSessions();
   all.forEach(s => s.stop());
-  await Promise.all(all.map(s => s.settle(5000)));
+  await Promise.all(all.map(s => s.settle(tunables().shutdownSettleMs)));
 };

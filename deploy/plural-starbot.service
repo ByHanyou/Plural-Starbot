@@ -1,6 +1,7 @@
 [Unit]
 Description=Plural Starbot (Discord bot)
-After=network.target plural-star-cloud-node.service
+After=network-online.target plural-star-cloud-node.service
+Wants=network-online.target
 
 [Service]
 Type=simple

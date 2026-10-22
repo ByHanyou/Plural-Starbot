@@ -16,6 +16,7 @@ import {
 } from 'discord.js';
 import {CloudError} from '../../cloud/cloudTypes';
 import {log} from '../../log';
+import {errorText} from '../../util';
 import {dropSession, getSession, hasStoredLink, peekSession} from '../../vault/registry';
 import {LINK_BROKEN_TEXT, NO_DATA_TEXT, type LinkStage} from '../../vault/session';
 import {linkAttempts} from '../../vault/throttle';
@@ -32,6 +33,12 @@ const inBotDm = (i: ChatInputCommandInteraction | ModalSubmitInteraction | Butto
 
 const dmOnly = (command: string): string =>
   `For your safety, \`/${command}\` only works in a direct message with me. Open a DM with Plural Starbot (click my name, then **Message**) and run \`/${command}\` there.`;
+
+const refuseOutsideDm = async (i: ChatInputCommandInteraction | ModalSubmitInteraction | ButtonInteraction, command: string): Promise<boolean> => {
+  if (inBotDm(i)) return false;
+  await i.reply({content: dmOnly(command), flags: MessageFlags.Ephemeral});
+  return true;
+};
 
 const linkCommand = new SlashCommandBuilder()
   .setName('link')
@@ -66,9 +73,9 @@ const minutes = (ms: number): string => {
 };
 
 const tooManyAttempts = (ms: number): string =>
-  `You have tried to link ${linkAttempts.limit} times in the last ${Math.round(linkAttempts.windowMs / 60000)} minutes. Try again in ${minutes(ms)}.`;
+  `You have tried to link ${linkAttempts().limit} times in the last ${Math.round(linkAttempts().windowMs / 60000)} minutes. Try again in ${minutes(ms)}.`;
 
-const errorText = (e: unknown): string => {
+const cloudErrorText = (e: unknown): string => {
   if (e instanceof CloudError) {
     if (e.status === 429) {
       const wait = e.retryAfterSeconds ? ` Try again in ${Math.ceil(e.retryAfterSeconds)} seconds.` : ' Try again in a little while.';
@@ -81,15 +88,12 @@ const errorText = (e: unknown): string => {
 };
 
 const handleLink = async (i: ChatInputCommandInteraction): Promise<void> => {
-  if (!inBotDm(i)) {
-    await i.reply({content: dmOnly('link'), flags: MessageFlags.Ephemeral});
-    return;
-  }
+  if (await refuseOutsideDm(i, 'link')) return;
   if (hasStoredLink(i.user.id)) {
     await i.reply({content: alreadyLinked(i.user.id, peekSession(i.user.id)?.system()?.name || '')});
     return;
   }
-  const wait = linkAttempts.retryInMs(i.user.id);
+  const wait = linkAttempts().retryInMs(i.user.id);
   if (wait > 0) {
     await i.reply({content: tooManyAttempts(wait)});
     return;
@@ -112,12 +116,9 @@ const handleLink = async (i: ChatInputCommandInteraction): Promise<void> => {
 };
 
 const handlePasswordModal = async (i: ModalSubmitInteraction): Promise<void> => {
-  if (!inBotDm(i)) {
-    await i.reply({content: dmOnly('link'), flags: MessageFlags.Ephemeral});
-    return;
-  }
+  if (await refuseOutsideDm(i, 'link')) return;
   const password = i.fields.getTextInputValue(PASSWORD_FIELD);
-  const wait = linkAttempts.retryInMs(i.user.id);
+  const wait = linkAttempts().retryInMs(i.user.id);
   if (wait > 0) {
     await i.reply({content: tooManyAttempts(wait)});
     return;
@@ -127,7 +128,7 @@ const handlePasswordModal = async (i: ModalSubmitInteraction): Promise<void> => 
     try {
       await i.editReply({content});
     } catch (e) {
-      log.warn('Could not update the /link reply for user %s: %s', i.user.id, e instanceof Error ? e.message : String(e));
+      log.warn('Could not update the /link reply for user %s: %s', i.user.id, errorText(e));
     }
   };
   try {
@@ -140,7 +141,7 @@ const handlePasswordModal = async (i: ModalSubmitInteraction): Promise<void> => 
       await say('Linking is already in progress for your account. Wait for it to finish.');
       return;
     }
-    linkAttempts.note(i.user.id);
+    linkAttempts().note(i.user.id);
     const result = await session.linkWithPassword(password, stage => say(STAGE_TEXT[stage]));
     if (result.kind === 'not-found') {
       await say('No vault found for that password. Check the password you use for Plural Star cloud and run `/link` again.');
@@ -154,7 +155,7 @@ const handlePasswordModal = async (i: ModalSubmitInteraction): Promise<void> => 
     );
   } catch (e) {
     if (!(e instanceof CloudError)) log.exception(e, 'Linking failed for user %s.', i.user.id);
-    await say(`❌ Linking failed: ${errorText(e)}`);
+    await say(`❌ Linking failed: ${cloudErrorText(e)}`);
   } finally {
     const s = peekSession(i.user.id);
     if (s && !s.isLinked() && !s.isLinking()) dropSession(i.user.id);
@@ -168,10 +169,7 @@ const unlinkButtons = (): ActionRowBuilder<ButtonBuilder> =>
   );
 
 const handleUnlink = async (i: ChatInputCommandInteraction): Promise<void> => {
-  if (!inBotDm(i)) {
-    await i.reply({content: dmOnly('unlink'), flags: MessageFlags.Ephemeral});
-    return;
-  }
+  if (await refuseOutsideDm(i, 'unlink')) return;
   if (!hasStoredLink(i.user.id)) {
     await i.reply({content: 'No vault is linked to your Discord account.'});
     return;
@@ -186,10 +184,7 @@ const handleUnlink = async (i: ChatInputCommandInteraction): Promise<void> => {
 };
 
 const handleUnlinkButton = async (i: ButtonInteraction): Promise<void> => {
-  if (!inBotDm(i)) {
-    await i.reply({content: dmOnly('unlink'), flags: MessageFlags.Ephemeral});
-    return;
-  }
+  if (await refuseOutsideDm(i, 'unlink')) return;
   if (i.customId === UNLINK_CANCEL) {
     await i.update({content: 'Cancelled. Your vault stays linked.', components: []});
     return;
@@ -213,7 +208,7 @@ const handleUnlinkButton = async (i: ButtonInteraction): Promise<void> => {
     });
   } catch (e) {
     log.exception(e, 'Unlinking failed for user %s.', i.user.id);
-    await i.editReply({content: `❌ Unlinking failed: ${errorText(e)}`});
+    await i.editReply({content: `❌ Unlinking failed: ${cloudErrorText(e)}`});
   }
 };
 

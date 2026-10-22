@@ -1,5 +1,8 @@
+import {tunables} from '../../config';
+import {isRecord} from '../../util';
 import type {AppSettings, FrontState, Member} from '../../vault/types';
 import {orderFronters} from '../profiles/frontLogic';
+import {nameKey} from '../profiles/lookup';
 
 export interface ProxyTag {
   prefix: string;
@@ -9,9 +12,6 @@ export interface ProxyTag {
 const BACKSLASH = 0x5c;
 
 export type AutoproxySetting = {mode: 'front'} | {mode: 'member'; memberId: string} | {mode: 'latch'};
-
-export const LATCH_HOURS = 6;
-export const LATCH_TIMEOUT_MS = LATCH_HOURS * 60 * 60 * 1000;
 
 export interface LatchRecord {
   memberId: string;
@@ -42,17 +42,6 @@ export interface PlanInput {
 
 export const isProxyable = (m: Member | null | undefined): m is Member =>
   !!m && typeof m === 'object' && typeof m.id === 'string' && !!m.id && !m.deleted && !m.archived && !m.isCustomFront;
-
-export const innerText = (input: string, tag: ProxyTag): string | null => {
-  const {prefix, suffix} = tag;
-  if (!prefix && !suffix) return null;
-  if (input.length >= prefix.length + suffix.length && input.startsWith(prefix) && input.endsWith(suffix)) {
-    return input.slice(prefix.length, input.length - suffix.length);
-  }
-  const bare = prefix.trimEnd() + suffix.trimStart();
-  if (bare && input.trim() === bare) return '';
-  return null;
-};
 
 const primaryFronters = (front: FrontState | null, members: Member[], settings?: AppSettings | null): Member[] => {
   const ids = front?.primary?.memberIds;
@@ -100,7 +89,7 @@ export interface EmojiTagMatch extends TagMatch {
   inner: string;
 }
 
-export const matchEmojiTags = (input: string, members: Member[], front: FrontState | null, settings?: AppSettings | null): EmojiTagMatch | null => {
+const matchEmojiTags = (input: string, members: Member[], front: FrontState | null, settings?: AppSettings | null): EmojiTagMatch | null => {
   const owners = new Map<string, Member[]>();
   for (const member of members) {
     if (!isProxyable(member)) continue;
@@ -133,12 +122,12 @@ export const matchEmojiTags = (input: string, members: Member[], front: FrontSta
 };
 
 export const latchMember = (last: LatchRecord | null | undefined, members: Member[], now: number = Date.now()): Member | null => {
-  if (!last || now - last.timestamp > LATCH_TIMEOUT_MS) return null;
+  if (!last || now - last.timestamp > tunables().latchHours * 60 * 60 * 1000) return null;
   const m = members.find(x => x && x.id === last.memberId);
   return isProxyable(m) ? m : null;
 };
 
-export const autoproxyMember = (
+const autoproxyMember = (
   setting: AutoproxySetting | null,
   members: Member[],
   front: FrontState | null,
@@ -168,11 +157,10 @@ export const planProxy = (i: PlanInput): ProxyPlan => {
 };
 
 export const parseAutoproxy = (v: unknown): AutoproxySetting | null => {
-  if (!v || typeof v !== 'object') return null;
-  const o = v as {mode?: unknown; memberId?: unknown};
-  if (o.mode === 'front') return {mode: 'front'};
-  if (o.mode === 'latch') return {mode: 'latch'};
-  if (o.mode === 'member' && typeof o.memberId === 'string' && o.memberId) return {mode: 'member', memberId: o.memberId};
+  if (!isRecord(v)) return null;
+  if (v.mode === 'front') return {mode: 'front'};
+  if (v.mode === 'latch') return {mode: 'latch'};
+  if (v.mode === 'member' && typeof v.memberId === 'string' && v.memberId) return {mode: 'member', memberId: v.memberId};
   return null;
 };
 
@@ -190,10 +178,10 @@ export const findMember = (members: Member[], query: string): MemberLookup => {
   const pool = members.filter(isProxyable);
   const byId = pool.find(m => m.id === q);
   if (byId) return {kind: 'found', member: byId};
-  const lower = q.toLowerCase();
+  const lower = nameKey(q);
   const steps: ((m: Member) => string)[] = [displayNameOf, m => String(m.name ?? '').trim(), m => String(m.nickname ?? '').trim()];
   for (const key of steps) {
-    const hits = pool.filter(m => key(m).toLowerCase() === lower);
+    const hits = pool.filter(m => nameKey(key(m)) === lower);
     if (hits.length === 1) return {kind: 'found', member: hits[0]};
     if (hits.length > 1) return {kind: 'ambiguous', count: hits.length};
   }

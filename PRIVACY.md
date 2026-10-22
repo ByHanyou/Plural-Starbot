@@ -1,6 +1,6 @@
 # Plural Starbot Privacy Policy
 
-Last updated: 2026-10-16
+Last updated: 2026-10-21
 
 Plural Starbot ("the bot") is operated by The Hanyou System ("we", "us"). Contact: The1Hanyou@gmail.com.
 
@@ -12,7 +12,7 @@ The bot keeps as little as it can. On its own server it stores:
 
 | Data | Why | Kept until |
 |---|---|---|
-| Your Discord user ID together with the vault link record: the key and authentication secret derived from your Plural Star cloud password, the vault's lookup ID, the manifest version, link and last-check timestamps, the list of vault entries the bot holds with their content hashes, a count of the vault's entries, and a temporary list of the object IDs the bot has uploaded but not yet added to the vault's index | To open your vault, act as one of its devices, and know what has changed since its last check | You run `/unlink` |
+| Your Discord user ID together with the vault link record: the key and authentication secret derived from your Plural Star cloud password, the device key the cloud node issued to the bot, the vault's lookup ID, the manifest version, link and last-check timestamps, the list of vault entries the bot holds with their content hashes, the names of entries removed since the last check, a count of the vault's entries, and a temporary list of the object IDs the bot has uploaded but not yet added to the vault's index | To open your vault, act as one of its devices, and know what has changed since its last check | You run `/unlink` |
 | Per-server settings chosen by moderators: reminder channel, roles, schedule and timezone, plus the reminder bot's two-day memory of which nudges and facts it has posted; proxy log channel; per user: autoproxy settings | To run reminders, proxying and logging the way the server configured them | The setting is changed or the bot leaves the server |
 | Per user: your proxy display-name format and Sys Tag (a global default and any per-server override) | To name and tag your proxied messages the way you set | You reset them or run `/unlink`; a per-server one also goes when the bot leaves that server |
 | Per user: the proxy display-name formats you set for single members, as each member's vault ID with its format (a global one and any per-server override) | To name the proxied messages of those members the way you set | You reset that member's format or run `/unlink`; a per-server one also goes when the bot leaves that server |
@@ -25,7 +25,7 @@ The bot never stores your cloud password. It does not store your vault contents 
 
 - **Message content.** The bot receives the content of messages in the servers it is in (Discord's Message Content intent). It only acts on a message when it starts or ends with one of your members' emoji or your autoproxy setting applies; that message is deleted and its content re-posted through a webhook. Messages that do not match are not kept.
 - **Attachments.** Files on a proxied message are re-uploaded with the proxied message and then not kept.
-- **Avatars.** To show a member's avatar on a proxied message, the bot serves that avatar image from your vault over HTTPS at an unguessable address. Anyone who has the address can view the image, as with any Discord avatar.
+- **Images.** To show avatars on proxied messages, and avatars, banners and image Custom Fields on profile cards, the bot serves those images from your vault over HTTPS at an unguessable address. Anyone who has the address can view the image, as with any Discord avatar.
 - **Vault writes.** When you change the front with the bot's commands, the bot writes the new front and the matching history entry into your vault, exactly as the Plural Star app would.
 
 ## 3. Where the data lives

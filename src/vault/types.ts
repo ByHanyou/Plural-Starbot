@@ -60,9 +60,11 @@ export interface Member {
   createdAt?: number;
   sourceId?: string;
   isCustomFront?: boolean;
+  seedKey?: string;
   isFacet?: boolean;
   nickname?: string;
   mailboxPassword?: string;
+  pkProxyTags?: {prefix?: string | null; suffix?: string | null}[];
   pkAvatarUrl?: string;
   pkBannerUrl?: string;
   pkKeepProxy?: boolean;
@@ -159,12 +161,21 @@ export const VAULT_KEYS = {
   customFieldDefs: 'ps:customFieldDefs',
 } as const;
 
+export const MEDIA_PREFIX = 'ps:media:';
+
 export const MEDIA_KEYS = {
-  memberAvatar: (memberId: string): string => `ps:media:av:${memberId}`,
-  memberBanner: (memberId: string): string => `ps:media:bn:${memberId}`,
-  systemAvatar: 'ps:media:sysav',
-  systemBanner: 'ps:media:sysbn',
+  memberAvatar: (memberId: string): string => `${MEDIA_PREFIX}av:${memberId}`,
+  memberBanner: (memberId: string): string => `${MEDIA_PREFIX}bn:${memberId}`,
+  systemAvatar: `${MEDIA_PREFIX}sysav`,
+  systemBanner: `${MEDIA_PREFIX}sysbn`,
+  customField: (memberId: string, fieldId: string): string => `${MEDIA_PREFIX}cf:${memberId}:${fieldId}`,
 } as const;
 
 export const isPublicImageKey = (key: string): boolean =>
-  key.startsWith('ps:media:av:') || key.startsWith('ps:media:bn:') || key === MEDIA_KEYS.systemAvatar || key === MEDIA_KEYS.systemBanner;
+  key.startsWith(`${MEDIA_PREFIX}av:`) ||
+  key.startsWith(`${MEDIA_PREFIX}bn:`) ||
+  key.startsWith(`${MEDIA_PREFIX}cf:`) ||
+  key === MEDIA_KEYS.systemAvatar ||
+  key === MEDIA_KEYS.systemBanner;
+
+export const isRosterMember = (m: Member): boolean => !m.isCustomFront && !m.isFacet && !m.deleted;

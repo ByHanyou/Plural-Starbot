@@ -21,9 +21,9 @@ import type {Server} from 'node:http';
 import {startAvatarServer} from './avatars';
 import {Config, ConfigError, loadConfig, setConfig} from './config';
 import {closeDb, db, dbLinkStore, openDb, startPurgeJob} from './db';
-import {log} from './log';
-import {modules} from './modules/index';
+import {log, setLogLevel} from './log';
 import {BotModule, commandJSON} from './modules/types';
+import {errorText} from './util';
 import {configureRegistry, loadAllSessions, stopAllSessions} from './vault/registry';
 
 const INVITE_PERMISSIONS = new PermissionsBitField([
@@ -43,9 +43,8 @@ const inviteUrl = (client: Client): string =>
   `&permissions=${INVITE_PERMISSIONS}&scope=bot+applications.commands`;
 
 const isDmCapable = (json: RESTPostAPIApplicationCommandsJSONBody): boolean => {
-  const j = json as {contexts?: number[] | null; dm_permission?: boolean};
-  if (Array.isArray(j.contexts)) return j.contexts.includes(InteractionContextType.BotDM);
-  return j.dm_permission === true;
+  if (Array.isArray(json.contexts)) return json.contexts.includes(InteractionContextType.BotDM);
+  return json.dm_permission === true;
 };
 
 interface CommandPlan {
@@ -71,7 +70,15 @@ const planCommands = (list: BotModule[]): CommandPlan => {
   return plan;
 };
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const eachModule = async (list: BotModule[], what: string, run: (m: BotModule) => Promise<void> | void): Promise<void> => {
+  for (const m of list) {
+    try {
+      await run(m);
+    } catch (e) {
+      log.exception(e, "Module '%s' failed %s.", m.name, what);
+    }
+  }
+};
 
 const replyFailure = async (interaction: Interaction): Promise<void> => {
   if (!interaction.isRepliable()) return;
@@ -79,7 +86,9 @@ const replyFailure = async (interaction: Interaction): Promise<void> => {
   try {
     if (interaction.replied || interaction.deferred) await interaction.followUp({content, flags: MessageFlags.Ephemeral});
     else await interaction.reply({content, flags: MessageFlags.Ephemeral});
-  } catch {}
+  } catch (e) {
+    log.debug('Could not report a command failure: %s', errorText(e));
+  }
 };
 
 const main = async (): Promise<void> => {
@@ -93,6 +102,9 @@ const main = async (): Promise<void> => {
     }
     throw e;
   }
+
+  setLogLevel(cfg.logLevel);
+  if (cfg.devGuildId) log.warn('DEV_GUILD_ID is set: every command is registered to server %s only and the global command list is cleared.', cfg.devGuildId);
 
   openDb(cfg.dataDir);
   log.info('Database open at %s.', cfg.dataDir);
@@ -113,6 +125,7 @@ const main = async (): Promise<void> => {
     .then(n => log.info('Loaded %d linked vault(s).', n))
     .catch(e => log.exception(e, 'Loading linked vaults failed.'));
 
+  const {modules} = await import('./modules/index');
   const plan = planCommands(modules);
 
   const client = new Client({
@@ -128,7 +141,7 @@ const main = async (): Promise<void> => {
 
   const syncGuild = async (guild: Guild): Promise<number> => {
     try {
-      const synced = await guild.commands.set(plan.guild);
+      const synced = await guild.commands.set(guild.id === cfg.devGuildId ? [...plan.global, ...plan.guild] : plan.guild);
       log.info("Synced %d command(s) to '%s'.", synced.size, guild.name);
       return synced.size;
     } catch (e) {
@@ -160,15 +173,17 @@ const main = async (): Promise<void> => {
 
     let total = 0;
     try {
-      const synced = await c.application.commands.set(plan.global);
+      const synced = await c.application.commands.set(cfg.devGuildId ? [] : plan.global);
       total += synced.size;
-      log.info('Synced %d global command(s).', synced.size);
+      if (cfg.devGuildId) log.info('Global command list cleared; server %s gets every command.', cfg.devGuildId);
+      else log.info('Synced %d global command(s).', synced.size);
     } catch (e) {
       log.exception(e, 'Could not sync global commands.');
     }
 
     if (!c.guilds.cache.size) log.warn('The bot is not in any server yet. Invite it with:\n  %s', inviteUrl(c));
     for (const guild of c.guilds.cache.values()) total += await syncGuild(guild);
+    if (cfg.devGuildId && !c.guilds.cache.has(cfg.devGuildId)) log.warn('DEV_GUILD_ID %s is not a server this bot is in.', cfg.devGuildId);
 
     log.info(
       "Ready. %d command(s) synced across %d server(s). If a command isn't visible, refresh Discord (Ctrl+R).",
@@ -176,14 +191,7 @@ const main = async (): Promise<void> => {
       c.guilds.cache.size,
     );
 
-    for (const m of modules) {
-      if (!m.onReady) continue;
-      try {
-        await m.onReady(c);
-      } catch (e) {
-        log.exception(e, "Module '%s' failed in onReady.", m.name);
-      }
-    }
+    await eachModule(modules, 'in onReady', m => m.onReady?.(c));
   });
 
   client.on(Events.GuildCreate, guild => {
@@ -224,14 +232,7 @@ const main = async (): Promise<void> => {
   });
 
   client.on(Events.MessageCreate, async (message: Message) => {
-    for (const m of modules) {
-      if (!m.onMessage) continue;
-      try {
-        await m.onMessage(message);
-      } catch (e) {
-        log.exception(e, "Module '%s' failed handling a message.", m.name);
-      }
-    }
+    await eachModule(modules, 'handling a message', m => m.onMessage?.(message));
   });
 
   client.on(Events.MessageReactionAdd, async (r: MessageReaction | PartialMessageReaction, u: User | PartialUser) => {
@@ -253,14 +254,7 @@ const main = async (): Promise<void> => {
       log.debug('Ignoring a reaction that could not be fetched: %s', errorText(e));
       return;
     }
-    for (const m of interested) {
-      if (!m.onReactionAdd) continue;
-      try {
-        await m.onReactionAdd(reaction, user);
-      } catch (e) {
-        log.exception(e, "Module '%s' failed handling a reaction.", m.name);
-      }
-    }
+    await eachModule(interested, 'handling a reaction', m => m.onReactionAdd?.(reaction, user));
   });
 
   client.on(Events.Error, e => log.exception(e, 'Discord client error.'));

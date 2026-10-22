@@ -4,7 +4,6 @@ import {
   ChannelType,
   ChatInputCommandInteraction,
   escapeMarkdown,
-  GuildTextBasedChannel,
   InteractionContextType,
   MessageFlags,
   PermissionFlagsBits,
@@ -12,13 +11,16 @@ import {
   SlashCommandBuilder,
   SlashCommandStringOption,
 } from 'discord.js';
-import {CloudError} from '../../cloud/cloudTypes';
+import {CloudError, isCloudKind} from '../../cloud/cloudTypes';
+import {tunables} from '../../config';
 import {db} from '../../db';
 import {log} from '../../log';
+import {MISSING_PERMISSION, SERVER_ONLY} from '../replies';
+import {errorText, orNull} from '../../util';
 import {linkedSession, peekSession} from '../../vault/registry';
 import {LINK_BROKEN_TEXT, type VaultSession} from '../../vault/session';
 import type {Member} from '../../vault/types';
-import {DEFAULT_FORMAT, FORMAT_MAX_LENGTH, parseFormatInput, parseSysTagInput, proxyNameFor, SettingSource, usesSysTag} from './format';
+import {DEFAULT_FORMAT, FORMAT_MAX_LENGTH, parseFormatInput, parseSysTagInput, proxyNameFor, SettingSource, SYS_TAG_MAX, usesSysTag} from './format';
 import {
   displayNameOf,
   emojiTagKey,
@@ -27,19 +29,21 @@ import {
   findMemberByEmoji,
   firstPrimaryFronter,
   isProxyable,
-  LATCH_HOURS,
   latchMember,
 } from './match';
 import {mentionsFor} from './proxy';
 import {getNameSettings, NameSettings, setAutoproxy, setLogChannel, setMemberFormat, setNameFormat, setSysTag} from './settings';
-import {ellipsize, MESSAGE_LIMIT} from './text';
+import {ellipsize, jumpUrl, MESSAGE_LIMIT} from './text';
 import {forgetWebhook, isApiError, targetOf, webhookFor} from './webhooks';
 
 const NOT_LINKED = 'No Plural Star vault is linked to your Discord account. Send me a direct message and run `/link` first.';
-const SERVER_ONLY = 'This command only works in a server.';
-const MISSING_PERMISSION = '❌ You need the **Manage Server** permission to change Plural Starbot.';
 const SCOPE_EVERYWHERE = 'everywhere';
 const SCOPE_SERVER = 'server';
+
+const retentionText = (): string => {
+  const d = tunables().proxiedRetentionDays;
+  return d === 1 ? '1 day' : `${d} days`;
+};
 
 export const autoproxyCommand = new SlashCommandBuilder()
   .setName('autoproxy')
@@ -52,7 +56,7 @@ export const autoproxyCommand = new SlashCommandBuilder()
       .setDescription('Proxy as one member')
       .addStringOption(o => o.setName('name').setDescription('Member name').setRequired(true).setMaxLength(100).setAutocomplete(true)),
   )
-  .addSubcommand(s => s.setName('latch').setDescription(`Proxy as the member of your last proxied message in this server, for up to ${LATCH_HOURS} hours`));
+  .addSubcommand(s => s.setName('latch').setDescription(`Proxy as the member of your last proxied message in this server, for up to ${tunables().latchHours} hours`));
 
 const scopeOption = (o: SlashCommandStringOption): SlashCommandStringOption =>
   o
@@ -95,7 +99,7 @@ export const proxyCommand = new SlashCommandBuilder()
     s
       .setName('systag')
       .setDescription('Set the Sys Tag that {Sys Tag} fills in your proxy format, or show it')
-      .addStringOption(o => o.setName('text').setDescription('Up to 20 characters. "clear" removes it'))
+      .addStringOption(o => o.setName('text').setDescription(`Up to ${SYS_TAG_MAX} characters. "clear" removes it`))
       .addStringOption(scopeOption),
   );
 
@@ -113,8 +117,6 @@ export const proxylogCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s.setName('off').setDescription('Stop logging proxied messages'));
 
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
 const sessionOrSay = async (i: ChatInputCommandInteraction): Promise<VaultSession | null> => {
   try {
     const session = await linkedSession(i.user.id);
@@ -127,9 +129,14 @@ const sessionOrSay = async (i: ChatInputCommandInteraction): Promise<VaultSessio
   return null;
 };
 
+const vaultReadFailure = (i: ChatInputCommandInteraction, e: unknown): string => {
+  if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', i.user.id);
+  return isCloudKind(e, 'LINK_BROKEN') ? `❌ ${LINK_BROKEN_TEXT}` : `❌ Could not read your vault: ${errorText(e)}`;
+};
+
 const latchStateLine = (guildId: string, userId: string, session: VaultSession): string => {
   const member = latchMember(db().lastProxiedInGuild(userId, guildId), session.members());
-  return member ? `latch: currently **${escapeMarkdown(displayNameOf(member))}**` : `latch: none (nothing proxied in the last ${LATCH_HOURS} hours)`;
+  return member ? `latch: currently **${escapeMarkdown(displayNameOf(member))}**` : `latch: none (nothing proxied in the last ${tunables().latchHours} hours)`;
 };
 
 export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<void> => {
@@ -163,7 +170,7 @@ export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<v
     await i.editReply({
       content:
         'Autoproxy is set to **latch** in this server: messages without a proxy tag are sent as the member of your last proxied message ' +
-        `in this server (any channel), until ${LATCH_HOURS} hours after it.\n` +
+        `in this server (any channel), until ${tunables().latchHours} hours after it.\n` +
         latchStateLine(i.guildId, i.user.id, session),
     });
     return;
@@ -173,9 +180,7 @@ export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<v
   try {
     await session.freshen();
   } catch (e) {
-    const broken = e instanceof CloudError && e.code === 'link broken';
-    if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', i.user.id);
-    await i.editReply({content: broken ? `❌ ${LINK_BROKEN_TEXT}` : `❌ Could not read your vault: ${errorText(e)}`});
+    await i.editReply({content: vaultReadFailure(i, e)});
     return;
   }
   const found = findMember(session.members(), query);
@@ -191,53 +196,30 @@ export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<v
   await i.editReply({content: `Autoproxy is set to **${escapeMarkdown(displayNameOf(found.member))}** in this server.`});
 };
 
-export const autocompleteAutoproxy = async (i: AutocompleteInteraction): Promise<void> => {
+const respondWithMembers = async (i: AutocompleteInteraction, option: string, byEmoji: boolean): Promise<void> => {
   const focused = i.options.getFocused(true);
-  if (focused.name !== 'name') {
-    await i.respond([]);
-    return;
-  }
   const session = peekSession(i.user.id);
-  if (!session?.isLinked()) {
-    await i.respond([]);
-    return;
-  }
-  const q = String(focused.value).trim().toLowerCase();
-  const choices = session
-    .members()
-    .filter(isProxyable)
-    .filter(m => m.id.length <= 100)
-    .map(m => ({m, label: displayNameOf(m) || m.id, nick: String(m.nickname ?? '').trim().toLowerCase()}))
-    .filter(c => !q || c.label.toLowerCase().includes(q) || c.nick.includes(q))
-    .slice(0, 25)
-    .map(c => ({name: ellipsize(c.label, 100), value: c.m.id}));
-  await i.respond(choices);
-};
-
-export const autocompleteProxy = async (i: AutocompleteInteraction): Promise<void> => {
-  const focused = i.options.getFocused(true);
-  if (focused.name !== 'member') {
-    await i.respond([]);
-    return;
-  }
-  const session = peekSession(i.user.id);
-  if (!session?.isLinked()) {
+  if (focused.name !== option || !session?.isLinked()) {
     await i.respond([]);
     return;
   }
   const typed = String(focused.value).trim();
   const q = typed.toLowerCase();
-  const key = emojiTagKey(typed);
+  const key = byEmoji ? emojiTagKey(typed) : '';
   const choices = session
     .members()
     .filter(isProxyable)
     .filter(m => m.id.length <= 100)
-    .map(m => ({m, label: displayNameOf(m) || m.id, nick: String(m.nickname ?? '').trim().toLowerCase(), emoji: emojiTagKey(emojiTagOf(m))}))
-    .filter(c => !q || c.label.toLowerCase().includes(q) || c.nick.includes(q) || (!!key && c.emoji.includes(key)))
+    .map(m => ({m, label: displayNameOf(m) || m.id, nick: String(m.nickname ?? '').trim().toLowerCase()}))
+    .filter(c => !q || c.label.toLowerCase().includes(q) || c.nick.includes(q) || (!!key && emojiTagKey(emojiTagOf(c.m)).includes(key)))
     .slice(0, 25)
     .map(c => ({name: ellipsize(c.label, 100), value: c.m.id}));
   await i.respond(choices);
 };
+
+export const autocompleteAutoproxy = (i: AutocompleteInteraction): Promise<void> => respondWithMembers(i, 'name', false);
+
+export const autocompleteProxy = (i: AutocompleteInteraction): Promise<void> => respondWithMembers(i, 'member', true);
 
 const SERVER_SCOPE_IN_DM = 'The **this server** scope only works in a server. Leave it out to change the setting everywhere.';
 const SOURCE_TEXT: Record<SettingSource, string> = {
@@ -248,14 +230,15 @@ const SOURCE_TEXT: Record<SettingSource, string> = {
   default: 'the default',
 };
 const MEMBER_SOURCE_TEXT: Record<SettingSource, string> = {
-  memberServer: 'their own format, set for this server',
-  memberEverywhere: 'their own format, set everywhere',
+  ...SOURCE_TEXT,
   server: 'your format for all members, set for this server',
   everywhere: 'your format for all members, set everywhere',
-  default: 'the default',
 };
 
 const shown = (s: string): string => (s.includes('`') ? `**${escapeMarkdown(s)}**` : `\`${s}\``);
+
+const memberPreviewLine = (member: Member, names: NameSettings): string =>
+  `Preview: **${escapeMarkdown(proxyNameFor(member, names.format.value, names.sysTag.value))}**`;
 
 const previewLine = async (userId: string, names: NameSettings): Promise<string> => {
   let session: VaultSession | null = null;
@@ -266,8 +249,7 @@ const previewLine = async (userId: string, names: NameSettings): Promise<string>
   }
   if (!session) return 'Link your vault with `/link` in a DM with me to see a preview.';
   const first = session.members().find(isProxyable);
-  if (!first) return 'Your vault has no member to show a preview with.';
-  return `Preview: **${escapeMarkdown(proxyNameFor(first, names.format.value, names.sysTag.value))}**`;
+  return first ? memberPreviewLine(first, names) : 'Your vault has no member to show a preview with.';
 };
 
 const saveTarget = async (i: ChatInputCommandInteraction, saving: boolean): Promise<string | null | undefined> => {
@@ -280,8 +262,11 @@ const saveTarget = async (i: ChatInputCommandInteraction, saving: boolean): Prom
 
 type Say = (lines: string[]) => Promise<void>;
 
-const memberPreviewLine = (member: Member, names: NameSettings): string =>
-  `Preview: **${escapeMarkdown(proxyNameFor(member, names.format.value, names.sysTag.value))}**`;
+const sayLines =
+  (i: ChatInputCommandInteraction): Say =>
+  async lines => {
+    await i.editReply({content: lines.join('\n'), allowedMentions: {parse: []}});
+  };
 
 const formatMemberOrSay = async (i: ChatInputCommandInteraction, query: string, say: Say): Promise<Member | null> => {
   const session = await sessionOrSay(i);
@@ -289,9 +274,7 @@ const formatMemberOrSay = async (i: ChatInputCommandInteraction, query: string, 
   try {
     await session.freshen();
   } catch (e) {
-    const broken = e instanceof CloudError && e.code === 'link broken';
-    if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', i.user.id);
-    await say([broken ? `❌ ${LINK_BROKEN_TEXT}` : `❌ Could not read your vault: ${errorText(e)}`]);
+    await say([vaultReadFailure(i, e)]);
     return null;
   }
   const typed = `**${escapeMarkdown(query.trim())}**`;
@@ -360,9 +343,7 @@ const handleFormat = async (i: ChatInputCommandInteraction): Promise<void> => {
   const target = await saveTarget(i, raw !== null);
   if (target === undefined) return;
   await i.deferReply({flags: MessageFlags.Ephemeral});
-  const say = async (lines: string[]): Promise<void> => {
-    await i.editReply({content: lines.join('\n'), allowedMentions: {parse: []}});
-  };
+  const say = sayLines(i);
   const here = i.inGuild() ? i.guildId : null;
 
   const memberQuery = i.options.getString('member');
@@ -409,9 +390,7 @@ const handleSysTag = async (i: ChatInputCommandInteraction): Promise<void> => {
   const target = await saveTarget(i, raw !== null);
   if (target === undefined) return;
   await i.deferReply({flags: MessageFlags.Ephemeral});
-  const say = async (lines: string[]): Promise<void> => {
-    await i.editReply({content: lines.join('\n'), allowedMentions: {parse: []}});
-  };
+  const say = sayLines(i);
   const here = i.inGuild() ? i.guildId : null;
 
   if (raw === null) {
@@ -481,7 +460,7 @@ export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void>
     }
     record = db().proxiedByMessageId(idRaw);
     if (!record) {
-      await i.editReply({content: 'I have no record of a proxied message with that ID. Proxied messages can only be edited for 7 days after they were sent.'});
+      await i.editReply({content: `I have no record of a proxied message with that ID. Proxied messages can only be edited for ${retentionText()} after they were sent.`});
       return;
     }
     if (record.userId !== i.user.id) {
@@ -491,29 +470,29 @@ export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void>
   } else {
     record = db().lastProxied(i.user.id, i.channelId);
     if (!record) {
-      await i.editReply({content: 'You have no proxied message in this channel from the last 7 days. Older messages cannot be edited.'});
+      await i.editReply({content: `You have no proxied message in this channel from the last ${retentionText()}. Older messages cannot be edited.`});
       return;
     }
   }
 
-  const channel = await i.client.channels.fetch(record.channelId).catch(() => null);
+  const channel = await orNull(i.client.channels.fetch(record.channelId), `Fetching channel ${record.channelId}`);
   if (!channel || !channel.isTextBased() || channel.isDMBased()) {
     await i.editReply({content: 'The channel of that message is gone.'});
     return;
   }
-  const guildChannel = channel as GuildTextBasedChannel;
-  const target = targetOf(guildChannel);
+  const target = targetOf(channel);
   if (!target) {
     await i.editReply({content: 'Messages in that channel cannot be edited.'});
     return;
   }
-  const member = guildChannel.guild.members.cache.get(i.user.id) ?? (await guildChannel.guild.members.fetch(i.user.id).catch(() => null));
+  const member =
+    channel.guild.members.cache.get(i.user.id) ?? (await orNull(channel.guild.members.fetch(i.user.id), `Fetching server member ${i.user.id}`));
 
   try {
     const hook = await webhookFor(target.host);
     await hook.editMessage(record.messageId, {
       content: text,
-      allowedMentions: mentionsFor(text, guildChannel, member),
+      allowedMentions: mentionsFor(text, channel, member),
       ...(target.threadId ? {threadId: target.threadId} : {}),
     });
   } catch (e) {
@@ -530,7 +509,7 @@ export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void>
     await i.editReply({content: `❌ Could not edit that message: ${errorText(e)}`});
     return;
   }
-  const link = `https://discord.com/channels/${guildChannel.guildId}/${record.channelId}/${record.messageId}`;
+  const link = jumpUrl(channel.guildId, record.channelId, record.messageId);
   await i.editReply({content: `✅ Edited ${link}.`});
 };
 
@@ -550,7 +529,7 @@ export const handleProxylog = async (i: ChatInputCommandInteraction): Promise<vo
     return;
   }
   const channel = i.options.getChannel('channel', true, [ChannelType.GuildText, ChannelType.GuildAnnouncement]);
-  const me = i.guild.members.me ?? (await i.guild.members.fetchMe().catch(() => null));
+  const me = i.guild.members.me ?? (await orNull(i.guild.members.fetchMe(), `Fetching the bot's own member in '${i.guild.name}'`));
   const perms = me ? channel.permissionsFor(me) : null;
   const missing = (
     [

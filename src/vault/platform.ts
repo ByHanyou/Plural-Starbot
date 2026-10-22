@@ -1,7 +1,9 @@
 import {EventEmitter} from 'node:events';
 import * as nodeCrypto from 'node:crypto';
 import type {CloudPlatform} from '../cloud/cloudVault';
-import type {CloudLinkState, CloudTransport} from '../cloud/cloudTypes';
+import {VAULT_KDF} from '../cloud/cloudCrypto';
+import type {CloudLimits, CloudLinkState, CloudTransport} from '../cloud/cloudTypes';
+import {tunables} from '../config';
 import {fetchTransport} from './transport';
 
 const contentHash = (s: string): string => {
@@ -18,7 +20,7 @@ const canonicalForSync = (s: string): string =>
     .replace(/file:\/\/[^"\\]*\/Documents\//g, 'file:///Documents/')
     .replace(/(file:[^"\\]*?)\?t=\d+/g, '$1');
 
-export const syncHash = (s: string): string => contentHash(canonicalForSync(s));
+const syncHash = (s: string): string => contentHash(canonicalForSync(s));
 
 export interface LinkStore {
   load(userId: string): CloudLinkState | null;
@@ -58,9 +60,7 @@ export class MemoryPlatform extends EventEmitter implements CloudPlatform {
   }
 
   async apply(keys: Record<string, string>): Promise<void> {
-    const changed = Object.keys(keys);
-    for (const k of changed) this.data.set(k, keys[k]);
-    if (changed.length) this.emit('applied', changed);
+    this.setLocal(keys);
   }
 
   async remove(key: string): Promise<void> {
@@ -98,6 +98,21 @@ export class MemoryPlatform extends EventEmitter implements CloudPlatform {
     return 'Plural Starbot';
   }
 
+  limits(): CloudLimits {
+    const t = tunables();
+    return {
+      transportTimeoutMs: t.vaultHttpTimeoutMs,
+      jsonTimeoutMs: t.vaultJsonTimeoutMs,
+      objectTimeoutMs: t.vaultObjectTimeoutMs,
+      pushDebounceMs: t.vaultPushDebounceMs,
+      retryBaseMs: t.vaultRetryBaseMs,
+      retryMaxMs: t.vaultRetryMaxMs,
+      checkMinIntervalMs: t.vaultCheckMinIntervalMs,
+      unlinkWaitMs: t.vaultUnlinkWaitMs,
+      sentSaveMs: t.vaultSentSaveMs,
+    };
+  }
+
   now(): number {
     return Date.now();
   }
@@ -106,7 +121,7 @@ export class MemoryPlatform extends EventEmitter implements CloudPlatform {
     return new Promise((resolve, reject) => {
       nodeCrypto.argon2(
         'argon2id',
-        {message: Buffer.from(password, 'utf8'), nonce: salt, parallelism: 1, tagLength: 32, memory: 65536, passes: 3},
+        {message: Buffer.from(password, 'utf8'), nonce: salt, parallelism: VAULT_KDF.p, tagLength: 32, memory: VAULT_KDF.m, passes: VAULT_KDF.t},
         (err, key) => (err ? reject(err) : resolve(key)),
       );
     });
@@ -131,9 +146,5 @@ export class MemoryPlatform extends EventEmitter implements CloudPlatform {
     const keys = [...this.data.keys()];
     this.data.clear();
     this.emit('applied', keys);
-  }
-
-  keys(): string[] {
-    return [...this.data.keys()];
   }
 }

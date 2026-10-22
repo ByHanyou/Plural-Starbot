@@ -41,12 +41,12 @@ export const isValidZone = (name: string): boolean => {
 };
 
 export const assertZone = (name: string): void => {
-  if (!isValidZone(name)) throw new RangeError(`No time zone found with key ${name}`);
+  if (!isValidZone(name)) throw new RangeError(`unknown time zone: ${name}`);
 };
 
-export const wallToUtcMs = (w: Wall): number => Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second, w.ms);
+const wallToUtcMs = (w: Wall): number => Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second, w.ms);
 
-export const utcMsToWall = (ms: number): Wall => {
+const utcMsToWall = (ms: number): Wall => {
   const d = new Date(ms);
   return {
     year: d.getUTCFullYear(),
@@ -79,9 +79,9 @@ export const wallAt = (zone: string, epochMs: number): Wall => {
   };
 };
 
-export const offsetAt = (zone: string, epochMs: number): number => wallToUtcMs(wallAt(zone, epochMs)) - epochMs;
+const offsetAt = (zone: string, epochMs: number): number => wallToUtcMs(wallAt(zone, epochMs)) - epochMs;
 
-export const instantsForWall = (zone: string, w: Wall): number[] => {
+const instantsForWall = (zone: string, w: Wall): number[] => {
   const naive = wallToUtcMs(w);
   const offsets = new Set([offsetAt(zone, naive - DAY_MS), offsetAt(zone, naive), offsetAt(zone, naive + DAY_MS)]);
   const found = new Set<number>();
@@ -92,7 +92,7 @@ export const instantsForWall = (zone: string, w: Wall): number[] => {
   return [...found].sort((a, b) => a - b);
 };
 
-export const toInstant = (zone: string, w: Wall, fold: 0 | 1 = 0): number => {
+const toInstant = (zone: string, w: Wall, fold: 0 | 1 = 0): number => {
   const found = instantsForWall(zone, w);
   if (found.length) return fold ? found[found.length - 1] : found[0];
   const naive = wallToUtcMs(w);

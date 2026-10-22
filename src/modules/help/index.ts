@@ -2,7 +2,6 @@ import {
   ActionRowBuilder,
   ApplicationIntegrationType,
   ButtonBuilder,
-  ButtonStyle,
   ContainerBuilder,
   InteractionContextType,
   MessageFlags,
@@ -11,7 +10,9 @@ import {
   type ChatInputCommandInteraction,
   type Interaction,
 } from 'discord.js';
+import {tunables} from '../../config';
 import type {BotModule} from '../types';
+import {pagerRow} from '../pager';
 
 const helpCommand = new SlashCommandBuilder()
   .setName('help')
@@ -59,7 +60,7 @@ const PAGES: Page[] = [
       {command: '`/autoproxy off`', options: 'None', does: 'Turns autoproxy off in this server.', where: 'Server', who: 'Linked users'},
       {command: '`/autoproxy front`', options: 'None', does: 'Proxies as the first listed primary fronter.', where: 'Server', who: 'Linked users'},
       {command: '`/autoproxy member`', options: '`name` (required, with suggestions)', does: 'Proxies as one fixed member.', where: 'Server', who: 'Linked users'},
-      {command: '`/autoproxy latch`', options: 'None', does: 'Proxies as the member of your last proxied message in this server, for up to 6 hours.', where: 'Server', who: 'Linked users'},
+      {command: '`/autoproxy latch`', options: 'None', does: `Proxies as the member of your last proxied message in this server, for up to ${tunables().latchHours} hours.`, where: 'Server', who: 'Linked users'},
       {command: '`/proxy format`', options: '`member` (optional: emoji or name, with suggestions) · `template` (optional, 80 max) · `scope` (optional)', does: 'With no template, shows the current format and a preview. With a template, sets it. With a member, sets that member\'s own format, which beats yours. `default` or `reset` clears it.', where: 'Server, DM', who: 'Linked users'},
       {command: '`/proxy systag`', options: '`text` (optional, 20 max; `clear` removes it) · `scope` (optional)', does: 'Sets or shows the Sys Tag that `{Sys Tag}` fills in.', where: 'Server, DM', who: 'Linked users'},
       {command: '`/proxy edit`', options: '`text` (required, 2000 max) · `message_id` (optional)', does: 'Edits your last proxied message in this channel, or the one you name.', where: 'Server', who: 'Your own messages'},
@@ -108,11 +109,7 @@ const helpCard = (page: number): (ContainerBuilder | ActionRowBuilder<ButtonBuil
   box.addTextDisplayComponents(t =>
     t.setContent([...p.notes, '-# Private members in Plural Star are only ever shown to their own system.'].join('\n')),
   );
-  const nav = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`${PAGE_ID}${page - 1}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-    new ButtonBuilder().setCustomId(PAGE_LABEL_ID).setLabel(`Page ${page + 1} of ${PAGES.length}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
-    new ButtonBuilder().setCustomId(`${PAGE_ID}${page + 1}`).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page === PAGES.length - 1),
-  );
+  const nav = pagerRow({prev: `${PAGE_ID}${page - 1}`, label: PAGE_LABEL_ID, next: `${PAGE_ID}${page + 1}`}, page, PAGES.length);
   return [box, nav];
 };
 
@@ -132,7 +129,7 @@ const onPage = async (i: ButtonInteraction): Promise<void> => {
 const help: BotModule = {
   name: 'help',
   commands: [helpCommand],
-  async onInteraction(interaction: Interaction) {
+  async onInteraction(interaction: Interaction): Promise<void> {
     if (interaction.isChatInputCommand() && interaction.commandName === 'help') await onHelp(interaction);
     else if (interaction.isButton() && interaction.customId.startsWith(PAGE_ID)) await onPage(interaction);
   },

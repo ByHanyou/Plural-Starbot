@@ -1,17 +1,19 @@
 import {APIEmbed, ButtonInteraction, ChatInputCommandInteraction, escapeMarkdown, MessageFlags, SlashCommandBuilder, User} from 'discord.js';
 import {avatarUrlFor} from '../../avatars';
-import {CloudError} from '../../cloud/cloudTypes';
+import {CloudError, isCloudKind} from '../../cloud/cloudTypes';
+import {tunables} from '../../config';
 import {log} from '../../log';
+import {SERVER_ONLY} from '../replies';
+import {errorText} from '../../util';
 import {linkedSession, peekSession} from '../../vault/registry';
 import {LINK_BROKEN_TEXT, NO_DATA_TEXT, type PushResult, type VaultSession} from '../../vault/session';
 import {FrontState, FrontTierKey, MEDIA_KEYS, Member, VAULT_KEYS} from '../../vault/types';
-import {type CardComponents, frontView, memberCard, parseMemberPageId, systemCard} from './cards';
-import {allFrontMemberIds, clearTiers, FrontTiers, quickAddTiers, readFront, removeTiers, setFrontTiers, updateFront} from './frontLogic';
+import {type CardComponents, frontView, memberCard, type MemberCardNav, parseMemberPageId, systemCard} from './cards';
+import {allFrontMemberIds, clearTiers, computeFrontUpdate, FrontTiers, migrateFrontState, quickAddTiers, removeTiers, setFrontTiers} from './frontLogic';
 import {findByName, isShown, nameCandidates, visibleMembers} from './lookup';
 import type {MentionNames} from './richText';
 
 const NOT_LINKED = 'Link your vault first: DM me /link';
-const SERVER_ONLY = 'This command only works in a server.';
 const NOT_LOADED = 'That vault could not be read just now. Try again in a minute.';
 const NOBODY = 'Nobody is fronting.';
 const GONE = 'This profile is no longer available.';
@@ -21,7 +23,15 @@ const TIER_CHOICES = [
   {name: 'Co-Front', value: 'cofront'},
   {name: 'Co-Conscious', value: 'coconscious'},
 ] as const;
-const TIER_OF: Record<string, FrontTierKey> = {primary: 'primary', cofront: 'coFront', coconscious: 'coConscious'};
+const TIER_OF = new Map<string, FrontTierKey>([
+  ['primary', 'primary'],
+  ['cofront', 'coFront'],
+  ['coconscious', 'coConscious'],
+]);
+
+const tierOption = (i: ChatInputCommandInteraction): FrontTierKey => TIER_OF.get(i.options.getString('tier') ?? 'primary') ?? 'primary';
+
+const PROFILE_KEYS = [VAULT_KEYS.members, VAULT_KEYS.front, VAULT_KEYS.history, VAULT_KEYS.system];
 
 export const memberCommand = new SlashCommandBuilder()
   .setName('member')
@@ -64,8 +74,6 @@ export const frontCommand = new SlashCommandBuilder()
       .addStringOption(o => o.setName('member').setDescription('Member name').setRequired(true).setMaxLength(100)),
   )
   .addSubcommand(s => s.setName('clear').setDescription('Clear the front (every tier)'));
-
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 interface Payload {
   content?: string;
@@ -122,7 +130,7 @@ const targetOf = async (i: ChatInputCommandInteraction, user: User, maxAgeMs?: n
   try {
     await session.freshen(maxAgeMs);
   } catch (e) {
-    const broken = e instanceof CloudError && e.code === 'link broken';
+    const broken = isCloudKind(e, 'LINK_BROKEN');
     if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', user.id);
     await say(i, {content: broken && own ? `❌ ${LINK_BROKEN_TEXT}` : NOT_LOADED});
     return null;
@@ -131,7 +139,7 @@ const targetOf = async (i: ChatInputCommandInteraction, user: User, maxAgeMs?: n
     await say(i, {content: own ? NO_DATA_TEXT : 'That vault has no data yet.'});
     return null;
   }
-  if (!holds(session, [VAULT_KEYS.members, VAULT_KEYS.front, VAULT_KEYS.history, VAULT_KEYS.system])) {
+  if (!holds(session, PROFILE_KEYS)) {
     await say(i, {content: NOT_LOADED});
     return null;
   }
@@ -174,21 +182,44 @@ const noMember = (name: string): string => `No member named ${bold(name)}.`;
 const ambiguous = (name: string, count: number, prefix: boolean): string =>
   prefix ? `${count} members start with ${bold(name)}. Type more of the name.` : `${count} members are called ${bold(name)}.`;
 
+const safeParse = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    log.debug('Stored vault JSON is unreadable: %s', errorText(e));
+    return undefined;
+  }
+};
+
 const currentFront = (s: VaultSession): FrontState | null | undefined => {
   const raw = s.platform.get(VAULT_KEYS.front);
   if (raw === undefined) return null;
   const parsed = safeParse(raw);
   if (parsed === null) return null;
-  return readFront(parsed) ?? undefined;
+  return migrateFrontState(parsed) ?? undefined;
 };
 
-const safeParse = (raw: string): unknown => {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-};
+const memberCardFor = (
+  session: VaultSession,
+  m: Member,
+  all: Member[],
+  showPrivate: boolean,
+  ownerView: boolean,
+  nav: MemberCardNav,
+  page?: number,
+): CardComponents =>
+  memberCard({
+    member: m,
+    groups: session.groups(),
+    fieldDefs: session.customFieldDefs(),
+    names: mentionNames(all, showPrivate),
+    avatarUrl: avatarUrlFor(session, MEDIA_KEYS.memberAvatar(m.id)),
+    bannerUrl: avatarUrlFor(session, MEDIA_KEYS.memberBanner(m.id)),
+    fieldImageUrl: fieldId => avatarUrlFor(session, MEDIA_KEYS.customField(m.id, fieldId)),
+    ownerView,
+    page,
+    nav,
+  });
 
 export const handleMember = async (i: ChatInputCommandInteraction): Promise<void> => {
   if (!(await guildOnly(i))) return;
@@ -212,21 +243,8 @@ export const handleMember = async (i: ChatInputCommandInteraction): Promise<void
     await say(i, {content: ambiguous(query, found.count, found.prefix)});
     return;
   }
-  const m = found.member;
-  const components = memberCard({
-    member: m,
-    groups: t.session.groups(),
-    fieldDefs: t.session.customFieldDefs(),
-    names: mentionNames(all, showPrivate),
-    avatarUrl: avatarUrlFor(t.session, MEDIA_KEYS.memberAvatar(m.id)),
-    bannerUrl: avatarUrlFor(t.session, MEDIA_KEYS.memberBanner(m.id)),
-    ownerView: t.own,
-    nav: {ownerId: t.user.id, privateView: showPrivate},
-  });
-  await sayCard(i, components);
+  await sayCard(i, memberCardFor(t.session, found.member, all, showPrivate, t.own, {ownerId: t.user.id, privateView: showPrivate}));
 };
-
-const BUTTON_WAIT_MS = 1500;
 
 const settlesWithin = (p: Promise<unknown>, ms: number): Promise<boolean> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -249,7 +267,7 @@ export const handleMemberPage = async (i: ButtonInteraction): Promise<void> => {
     return;
   }
   const reading = readVault(ref.ownerId);
-  if (!(await settlesWithin(reading, BUTTON_WAIT_MS))) await i.deferUpdate();
+  if (!(await settlesWithin(reading, tunables().buttonWaitMs))) await i.deferUpdate();
   const tell = (content: string): Promise<unknown> =>
     i.deferred ? i.followUp({content, flags: MessageFlags.Ephemeral}) : i.reply({content, flags: MessageFlags.Ephemeral});
   const own = i.user.id === ref.ownerId;
@@ -257,7 +275,7 @@ export const handleMemberPage = async (i: ButtonInteraction): Promise<void> => {
   try {
     session = await reading;
   } catch (e) {
-    const broken = e instanceof CloudError && e.code === 'link broken';
+    const broken = isCloudKind(e, 'LINK_BROKEN');
     if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', ref.ownerId);
     await tell(broken && own ? `❌ ${LINK_BROKEN_TEXT}` : NOT_LOADED);
     return;
@@ -266,7 +284,7 @@ export const handleMemberPage = async (i: ButtonInteraction): Promise<void> => {
     await tell(GONE);
     return;
   }
-  if (!holds(session, [VAULT_KEYS.members, VAULT_KEYS.front, VAULT_KEYS.history, VAULT_KEYS.system])) {
+  if (!holds(session, PROFILE_KEYS)) {
     await tell(NOT_LOADED);
     return;
   }
@@ -277,17 +295,7 @@ export const handleMemberPage = async (i: ButtonInteraction): Promise<void> => {
     await tell(GONE);
     return;
   }
-  const components = memberCard({
-    member: m,
-    groups: session.groups(),
-    fieldDefs: session.customFieldDefs(),
-    names: mentionNames(all, showPrivate),
-    avatarUrl: avatarUrlFor(session, MEDIA_KEYS.memberAvatar(m.id)),
-    bannerUrl: avatarUrlFor(session, MEDIA_KEYS.memberBanner(m.id)),
-    ownerView: ref.ownerView,
-    page: ref.page,
-    nav: {ownerId: ref.ownerId, privateView: ref.privateView},
-  });
+  const components = memberCardFor(session, m, all, showPrivate, ref.ownerView, {ownerId: ref.ownerId, privateView: ref.privateView}, ref.page);
   if (i.deferred) await i.editReply({components, flags: MessageFlags.IsComponentsV2, allowedMentions: {parse: []}});
   else await i.update({components, flags: MessageFlags.IsComponentsV2, allowedMentions: {parse: []}});
 };
@@ -310,6 +318,15 @@ export const handleSystem = async (i: ChatInputCommandInteraction): Promise<void
   await sayCard(i, components);
 };
 
+const staleNote = (s: VaultSession): string | null => {
+  const st = s.syncState();
+  const age = st.okAt ? Date.now() - st.okAt : Infinity;
+  if (!st.error && age < tunables().profileStaleMs) return null;
+  const when = st.okAt ? `<t:${Math.floor(st.okAt / 1000)}:R>` : 'never';
+  if (st.error) return `⚠️ This is the last front I could read from the vault (synced ${when}). Reading it fails right now: ${st.error}`;
+  return `⚠️ This front was last synced ${when}.`;
+};
+
 const showFront = async (i: ChatInputCommandInteraction, t: Target, showPrivate: boolean, note: string | null = null): Promise<void> => {
   const view = frontView({
     front: currentFront(t.session) ?? null,
@@ -320,8 +337,9 @@ const showFront = async (i: ChatInputCommandInteraction, t: Target, showPrivate:
     systemName: t.session.system()?.name || '',
     systemAvatarUrl: avatarUrlFor(t.session, MEDIA_KEYS.systemAvatar),
   });
-  if (view.embed) await say(i, note ? {content: note, embeds: [view.embed]} : {embeds: [view.embed]});
-  else await say(i, {content: note ? `${note}\n${NOBODY}` : NOBODY});
+  const content = [note, staleNote(t.session)].filter(Boolean).join('\n');
+  if (view.embed) await say(i, content ? {content, embeds: [view.embed]} : {embeds: [view.embed]});
+  else await say(i, {content: content ? `${content}\n${NOBODY}` : NOBODY});
 };
 
 const handleShow = async (i: ChatInputCommandInteraction): Promise<void> => {
@@ -391,12 +409,12 @@ const changeFront = async (i: ChatInputCommandInteraction, sub: string): Promise
       if (!m) return;
       if (!ids.includes(m.id)) ids.push(m.id);
     }
-    tiers = setFrontTiers(front, TIER_OF[i.options.getString('tier') ?? 'primary'] ?? 'primary', ids);
+    tiers = setFrontTiers(front, tierOption(i), ids);
   } else {
     const m = await resolve(names[0] ?? '');
     if (!m) return;
     if (sub === 'add') {
-      tiers = quickAddTiers(front, m.id, TIER_OF[i.options.getString('tier') ?? 'primary'] ?? 'primary');
+      tiers = quickAddTiers(front, m.id, tierOption(i));
     } else {
       tiers = allFrontMemberIds(front).includes(m.id) ? removeTiers(front, m.id) : null;
       if (!tiers) {
@@ -406,7 +424,7 @@ const changeFront = async (i: ChatInputCommandInteraction, sub: string): Promise
     }
   }
 
-  const next = updateFront(front, s.history(), tiers.primary, tiers.coFront, tiers.coConscious);
+  const next = computeFrontUpdate(front, s.history(), tiers.primary, tiers.coFront, tiers.coConscious);
   let pushed: PushResult;
   try {
     pushed = await s.writeAndPush({[VAULT_KEYS.front]: next.front, [VAULT_KEYS.history]: next.history});

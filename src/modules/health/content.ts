@@ -1,4 +1,4 @@
-export const FOOD_NUDGES: readonly string[] = [
+const FOOD_NUDGES: readonly string[] = [
   "Hey, quick check: have you eaten anything recently? Even a small snack counts.",
   "Friendly reminder: your body runs better with fuel. Grabbed a bite lately?",
   "Just popping in to ask: when's the last time you ate something?",
@@ -41,7 +41,7 @@ export const FOOD_NUDGES: readonly string[] = [
   "Eating regularly is one of the kindest boring things you can do for yourself.",
 ];
 
-export const HYDRATION_NUDGES: readonly string[] = [
+const HYDRATION_NUDGES: readonly string[] = [
   "Water break! When's the last time you had a sip of something?",
   "Gentle reminder to hydrate: your body loves a fresh glass of water.",
   "Psst, have you had a drink lately? Your future self stays thirsty otherwise.",
@@ -84,7 +84,7 @@ export const HYDRATION_NUDGES: readonly string[] = [
   "You've leveled up everything else today. Level up your hydration too.",
 ];
 
-export const MEDS_NUDGES: readonly string[] = [
+const MEDS_NUDGES: readonly string[] = [
   "Gentle reminder: have you taken your meds recently? No worries if you're already on it.",
   "Friendly med check: this is your nudge in case today got busy.",
   "Psst, don't forget your meds if they're due. You've got this.",
@@ -127,7 +127,7 @@ export const MEDS_NUDGES: readonly string[] = [
   "Keeping up with meds is an act of kindness toward every version of you.",
 ];
 
-export const ACTIVITY_NUDGES: readonly string[] = [
+const ACTIVITY_NUDGES: readonly string[] = [
   "Stretch break! Reach for the ceiling, roll those shoulders, feel human again.",
   "Your body's been parked a while. A quick lap around the room counts.",
   "Gentle nudge: stand up, shake it out, sit back down a little looser.",
@@ -170,7 +170,7 @@ export const ACTIVITY_NUDGES: readonly string[] = [
   "Tiny movement now, comfier body later. That's the whole deal.",
 ];
 
-export const EYESTRAIN_NUDGES: readonly string[] = [
+const EYESTRAIN_NUDGES: readonly string[] = [
   "Eye break! Look at something far away for a bit and let your focus unclench.",
   "Unplug your eyeballs for a moment. The scenery beyond the screen is free.",
   "Blink check! Screens make us forget. A few slow blinks feel great.",
@@ -213,7 +213,7 @@ export const EYESTRAIN_NUDGES: readonly string[] = [
   "Consider this official permission to stare into space for a bit.",
 ];
 
-export const GROOMING_NUDGES: readonly string[] = [
+const GROOMING_NUDGES: readonly string[] = [
   "Hair check: a quick brush or comb can make the whole day feel more put together.",
   "Gentle nudge: a splash of water on your face is a tiny reset button. Works surprisingly well.",
   "Nails looking long or snaggy? A quick trim now saves a snag later.",
@@ -256,7 +256,7 @@ export const GROOMING_NUDGES: readonly string[] = [
   "Consider this your official excuse to go make yourself feel a little more human.",
 ];
 
-export const TEETH_NUDGES: readonly string[] = [
+const TEETH_NUDGES: readonly string[] = [
   "Teeth check! Have they been brushed yet today? If not, the sink awaits.",
   "Gentle reminder: your future dentist visits get easier every time you brush today.",
   "Two minutes with a toothbrush is one of the best trades in all of self-care.",
@@ -299,7 +299,7 @@ export const TEETH_NUDGES: readonly string[] = [
   "Consider this your official permission slip to go be minty.",
 ];
 
-export const SHOWER_NUDGES: readonly string[] = [
+const SHOWER_NUDGES: readonly string[] = [
   "Shower check-in: when was the last one? If you had to count, today's a great candidate.",
   "Gentle nudge: warm water on your shoulders fixes more moods than it should.",
   "No energy for a full shower? A quick rinse still counts. It all counts.",
@@ -342,7 +342,7 @@ export const SHOWER_NUDGES: readonly string[] = [
   "Consider this your official splash zone pass. Go get clean.",
 ];
 
-export const KINDSELF_NUDGES: readonly string[] = [
+const KINDSELF_NUDGES: readonly string[] = [
   "Be kind to yourself today: talk to yourself the way you'd talk to a friend you love.",
   "Gentle nudge: whatever you didn't finish today, you're still allowed to rest tonight.",
   "You've survived every hard day so far. Give yourself a little credit for that.",
@@ -385,7 +385,7 @@ export const KINDSELF_NUDGES: readonly string[] = [
   "Consider this your official permission slip to be gentle with yourself today.",
 ];
 
-export const KINDOTHERS_NUDGES: readonly string[] = [
+const KINDOTHERS_NUDGES: readonly string[] = [
   "Be kind to someone today: a genuine compliment costs nothing and lands for hours.",
   "Gentle nudge: is there someone you've been meaning to check on? Today's a good day.",
   "Tell someone what you appreciate about them. People rarely hear it enough.",
@@ -428,7 +428,7 @@ export const KINDOTHERS_NUDGES: readonly string[] = [
   "Consider this your official excuse to go make someone's day for no reason.",
 ];
 
-export const KINDANIMALS_NUDGES: readonly string[] = [
+const KINDANIMALS_NUDGES: readonly string[] = [
   "Be kind to an animal today: an extra minute of attention means the world to them.",
   "Gentle nudge: is a pet nearby due for water, play, or a little fuss? They'd vote yes.",
   "Your pet thinks you hung the moon. A few minutes of undivided time repays the faith.",
@@ -471,7 +471,7 @@ export const KINDANIMALS_NUDGES: readonly string[] = [
   "Consider this your official cue to go tell an animal it's a good one.",
 ];
 
-export const KINDMISC_NUDGES: readonly string[] = [
+const KINDMISC_NUDGES: readonly string[] = [
   "Be kind to the world today: pick up one piece of litter that isn't yours.",
   "Gentle nudge: the planet counts as a neighbor. One small green choice today is plenty.",
   "Return the shopping cart. It's the classic random act of civilization.",
@@ -514,7 +514,7 @@ export const KINDMISC_NUDGES: readonly string[] = [
   "Consider this your official invitation to leave the world one notch nicer than you found it.",
 ];
 
-export const FOOD_FACTS: readonly string[] = [
+const FOOD_FACTS: readonly string[] = [
   "Your brain uses about 20% of your daily calories, despite being only about 2% of your body weight.",
   "Fiber isn't digested by you; it feeds the trillions of helpful bacteria living in your gut.",
   "Your body can't make 'essential' amino acids on its own, so food protein is the only way to get them.",
@@ -557,7 +557,7 @@ export const FOOD_FACTS: readonly string[] = [
   "Frozen vegetables keep most of their nutrients; they're usually frozen at peak ripeness.",
 ];
 
-export const HYDRATION_FACTS: readonly string[] = [
+const HYDRATION_FACTS: readonly string[] = [
   "Water makes up about 60% of your body, so you're basically a very sophisticated puddle.",
   "Your brain and heart are around 73% water.",
   "Your lungs are roughly 83% water.",
@@ -600,7 +600,7 @@ export const HYDRATION_FACTS: readonly string[] = [
   "The best water temperature is whichever one you'll actually drink.",
 ];
 
-export const MEDICINE_FACTS: readonly string[] = [
+const MEDICINE_FACTS: readonly string[] = [
   "Penicillin, the first true antibiotic, was discovered by accident in 1928 when mold drifted into Alexander Fleming's petri dish.",
   "Aspirin traces back to willow bark, which people used for pain and fever thousands of years ago.",
   "The 'Rx' symbol on prescriptions is thought to come from the Latin word 'recipe,' meaning 'take.'",
@@ -643,7 +643,7 @@ export const MEDICINE_FACTS: readonly string[] = [
   "The groove down the middle of some tablets is called a score line.",
 ];
 
-export const ACTIVITY_FACTS: readonly string[] = [
+const ACTIVITY_FACTS: readonly string[] = [
   "The 10,000 steps goal started as a 1960s Japanese pedometer marketing slogan; health benefits begin at far fewer steps.",
   "Fidgeting, pacing, and everyday puttering burn real energy; researchers call it NEAT, non-exercise activity thermogenesis.",
   "Your calf muscles help pump blood back up to your heart; they're sometimes called a second heart.",
@@ -686,7 +686,7 @@ export const ACTIVITY_FACTS: readonly string[] = [
   "The word 'gymnasium' comes from the Greek gymnazein, meaning to exercise.",
 ];
 
-export const EYESTRAIN_FACTS: readonly string[] = [
+const EYESTRAIN_FACTS: readonly string[] = [
   "You normally blink around 15 to 20 times a minute, but screen focus can cut that roughly in half.",
   "The 20-20-20 rule: every 20 minutes, look at something 20 feet away for 20 seconds.",
   "Blinking spreads a fresh layer of tears across your eyes, like a wiper with built-in cleaner.",
@@ -729,7 +729,7 @@ export const EYESTRAIN_FACTS: readonly string[] = [
   "Eye strain often announces itself as a headache or neck ache before the eyes themselves complain.",
 ];
 
-export const GROOMING_FACTS: readonly string[] = [
+const GROOMING_FACTS: readonly string[] = [
   "Hair grows about half an inch per month, roughly six inches a year.",
   "Brushing your hair spreads natural scalp oils down the strands, which is where shine comes from.",
   "Fingernails grow noticeably faster than toenails.",
@@ -772,7 +772,7 @@ export const GROOMING_FACTS: readonly string[] = [
   "Feeling put together after grooming isn't your imagination; small self-care rituals measurably lift mood and sense of control.",
 ];
 
-export const TEETH_FACTS: readonly string[] = [
+const TEETH_FACTS: readonly string[] = [
   "Dentists recommend brushing for about two minutes, twice a day.",
   "Tooth enamel is the hardest substance the human body makes.",
   "Unlike bone, enamel can't rebuild itself once it's worn away, so protecting it is the whole game.",
@@ -815,7 +815,7 @@ export const TEETH_FACTS: readonly string[] = [
   "Teeth are the only part of your skeleton the world gets to see, so they double as a first impression.",
 ];
 
-export const SHOWER_FACTS: readonly string[] = [
+const SHOWER_FACTS: readonly string[] = [
   "Skin is your body's largest organ.",
   "The outer layer of your skin replaces itself roughly every month.",
   "Very hot water strips away protective skin oils; warm is kinder than scalding.",
@@ -858,7 +858,7 @@ export const SHOWER_FACTS: readonly string[] = [
   "Feeling more human after a shower is chemistry as much as cleanliness: warmth, scent, and ritual all lower stress.",
 ];
 
-export const KINDNESS_FACTS: readonly string[] = [
+const KINDNESS_FACTS: readonly string[] = [
   "Doing something kind reliably lifts the mood of the person doing it, a boost researchers nicknamed the helper's high.",
   "Kindness is contagious: seeing someone act kindly makes bystanders measurably more likely to be kind next.",
   "People consistently underestimate how much a compliment or a check-in message means to the person receiving it.",
@@ -943,5 +943,3 @@ export const TOPIC_META: Readonly<Record<string, {emoji: string; kicker: string}
   kindmisc: {emoji: '🌱', kicker: 'Kindness fact'},
   kindness: {emoji: '✨', kicker: 'Kindness fact'},
 };
-
-export const DEFAULT_COLOR = 0x5865f2;
