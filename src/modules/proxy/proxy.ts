@@ -114,7 +114,7 @@ const repost = async (message: Message<true>, session: VaultSession, member: Mem
       log.warn('Not proxying message %s: attachment %s could not be downloaded.', message.id, a.name);
       return;
     }
-    files.push(new AttachmentBuilder(bytes, {name: a.name, ...(a.description ? {description: a.description} : {})}));
+    files.push(new AttachmentBuilder(bytes, {name: a.name, ...(a.description ? {description: a.description} : {})}).setSpoiler(a.spoiler));
   }
 
   const body = [text, ...budget.skipped.map(tooLargeNote)].filter(s => s.trim()).join('\n');
