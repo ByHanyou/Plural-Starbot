@@ -32,7 +32,7 @@ import {
   latchMember,
 } from './match';
 import {mentionsFor} from './proxy';
-import {getNameSettings, NameSettings, setAutoproxy, setLogChannel, setMemberFormat, setNameFormat, setSysTag} from './settings';
+import {getNameSettings, getPings, NameSettings, PINGS_OFF, PINGS_ON, setAutoproxy, setLogChannel, setMemberFormat, setNameFormat, setPings, setSysTag} from './settings';
 import {ellipsize, jumpUrl, MESSAGE_LIMIT} from './text';
 import {forgetWebhook, isApiError, targetOf, webhookFor} from './webhooks';
 
@@ -100,6 +100,13 @@ export const proxyCommand = new SlashCommandBuilder()
       .setName('systag')
       .setDescription('Set the Sys Tag that {Sys Tag} fills in your proxy format, or show it')
       .addStringOption(o => o.setName('text').setDescription(`Up to ${SYS_TAG_MAX} characters. "clear" removes it`))
+      .addStringOption(scopeOption),
+  )
+  .addSubcommand(s =>
+    s
+      .setName('pings')
+      .setDescription('Turn 🔔 reaction pings on your proxied messages on or off, or show the setting')
+      .addStringOption(o => o.setName('state').setDescription('on or off').addChoices({name: 'on', value: PINGS_ON}, {name: 'off', value: PINGS_OFF}))
       .addStringOption(scopeOption),
   );
 
@@ -428,6 +435,33 @@ const handleSysTag = async (i: ChatInputCommandInteraction): Promise<void> => {
   await say(lines);
 };
 
+const PINGS_MEANING: Record<string, string> = {
+  [PINGS_ON]: 'Reacting 🔔 to one of your proxied messages pings you in that channel.',
+  [PINGS_OFF]: 'Reacting 🔔 to one of your proxied messages does not ping you; the person who reacted gets a DM with your mention instead.',
+};
+
+const handlePings = async (i: ChatInputCommandInteraction): Promise<void> => {
+  const raw = i.options.getString('state');
+  const target = await saveTarget(i, raw !== null);
+  if (target === undefined) return;
+  const here = i.inGuild() ? i.guildId : null;
+
+  if (raw === null) {
+    const pings = getPings(here, i.user.id);
+    const lines = [`🔔 pings are **${pings.value}** for you ${here ? 'in this server' : 'everywhere'} (${SOURCE_TEXT[pings.source]}).`, PINGS_MEANING[pings.value] ?? ''];
+    await i.reply({content: lines.filter(Boolean).join('\n'), flags: MessageFlags.Ephemeral});
+    return;
+  }
+
+  setPings(target, i.user.id, raw);
+  const lines = [`✅ 🔔 pings are now **${raw}** for you ${target ? 'in this server' : 'everywhere'}.`, PINGS_MEANING[raw] ?? ''];
+  if (!target && here) {
+    const local = getPings(here, i.user.id);
+    if (local.source === 'server') lines.push(`This server has its own setting, **${local.value}**, which still applies here.`);
+  }
+  await i.reply({content: lines.filter(Boolean).join('\n'), flags: MessageFlags.Ephemeral});
+};
+
 export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void> => {
   const sub = i.options.getSubcommand();
   if (sub === 'format') {
@@ -436,6 +470,10 @@ export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void>
   }
   if (sub === 'systag') {
     await handleSysTag(i);
+    return;
+  }
+  if (sub === 'pings') {
+    await handlePings(i);
     return;
   }
   if (!i.inGuild()) {

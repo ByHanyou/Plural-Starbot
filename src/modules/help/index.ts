@@ -63,11 +63,13 @@ const PAGES: Page[] = [
       {command: '`/autoproxy latch`', options: 'None', does: `Proxies as the member of your last proxied message in this server, for up to ${tunables().latchHours} hours.`, where: 'Server', who: 'Linked users'},
       {command: '`/proxy format`', options: '`member` (optional: emoji or name, with suggestions) · `template` (optional, 80 max) · `scope` (optional)', does: 'With no template, shows the current format and a preview. With a template, sets it. With a member, sets that member\'s own format, which beats yours. `default` or `reset` clears it.', where: 'Server, DM', who: 'Linked users'},
       {command: '`/proxy systag`', options: '`text` (optional, 20 max; `clear` removes it) · `scope` (optional)', does: 'Sets or shows the Sys Tag that `{Sys Tag}` fills in.', where: 'Server, DM', who: 'Linked users'},
+      {command: '`/proxy pings`', options: '`state` (optional: on or off) · `scope` (optional)', does: 'Turns 🔔 reaction pings on your proxied messages on (the default) or off, or shows the setting.', where: 'Server, DM', who: 'Linked users'},
       {command: '`/proxy edit`', options: '`text` (required, 2000 max) · `message_id` (optional)', does: 'Edits your last proxied message in this channel, or the one you name.', where: 'Server', who: 'Your own messages'},
       {command: '`<emoji> text` or `text <emoji>`', options: 'The member\'s profile Emoji field', does: 'Posts the message as that member. Works for facets, not custom fronts.', where: 'Server', who: 'Linked users'},
       {command: '`\\text`', options: 'Starts with a backslash', does: 'Sends that one message unproxied.', where: 'Server', who: 'Linked users'},
       {command: 'React ❌', options: 'On a proxied message', does: 'Deletes it.', where: 'Server', who: 'Only the sender'},
       {command: 'React ❓', options: 'On a proxied message', does: 'DMs you who sent it.', where: 'Server', who: 'Anyone'},
+      {command: 'React 🔔', options: 'On a proxied message', does: 'Pings its sender in the channel, once per message. If they turned 🔔 pings off, DMs you their mention instead.', where: 'Server', who: 'Anyone but the sender'},
     ],
     notes: [
       '**`scope`:** everywhere (default) or this server. "This server" is refused in a DM.',

@@ -6,7 +6,7 @@ import {tunables} from './config';
 import {log} from './log';
 import {errorText} from './util';
 
-const retentionMs = (): number => tunables().proxiedRetentionDays * 24 * 60 * 60 * 1000;
+export const retentionMs = (): number => tunables().proxiedRetentionDays * 24 * 60 * 60 * 1000;
 const DB_FILE_NAME = 'starbot.db';
 
 export interface ProxiedMessage {

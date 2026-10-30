@@ -1,6 +1,6 @@
 # Plural Starbot Privacy Policy
 
-Last updated: 2026-10-21
+Last updated: 2026-10-29
 
 Plural Starbot ("the bot") is operated by The Hanyou System ("we", "us"). Contact: The1Hanyou@gmail.com.
 
@@ -16,6 +16,7 @@ The bot keeps as little as it can. On its own server it stores:
 | Per-server settings chosen by moderators: reminder channel, roles, schedule and timezone, plus the reminder bot's two-day memory of which nudges and facts it has posted; proxy log channel; per user: autoproxy settings | To run reminders, proxying and logging the way the server configured them | The setting is changed or the bot leaves the server |
 | Per user: your proxy display-name format and Sys Tag (a global default and any per-server override) | To name and tag your proxied messages the way you set | You reset them or run `/unlink`; a per-server one also goes when the bot leaves that server |
 | Per user: the proxy display-name formats you set for single members, as each member's vault ID with its format (a global one and any per-server override) | To name the proxied messages of those members the way you set | You reset that member's format or run `/unlink`; a per-server one also goes when the bot leaves that server |
+| Per user: whether 🔔 reaction pings on your proxied messages are on or off (a global setting and any per-server override), only once you change it | To ping you, or not, when someone reacts 🔔 to your proxied message | You turn them back on everywhere or run `/unlink`; a per-server one also goes when the bot leaves that server |
 | For each proxied message: the new message ID, the original message ID, the server, the channel, the member, your user ID and the time | So that you can edit or delete a proxied message and so moderators can see who sent it | 7 days, then deleted automatically |
 | Operational logs on the bot's server, which can include Discord user IDs, server names and error details, never message content or vault contents | To diagnose problems | Rotated with the server's logs |
 
@@ -27,6 +28,7 @@ The bot never stores your cloud password. It does not store your vault contents 
 - **Attachments.** Files on a proxied message are re-uploaded with the proxied message and then not kept.
 - **Images.** To show avatars on proxied messages, and avatars, banners and image Custom Fields on profile cards, the bot serves those images from your vault over HTTPS at an unguessable address. Anyone who has the address can view the image, as with any Discord avatar.
 - **Vault writes.** When you change the front with the bot's commands, the bot writes the new front and the matching history entry into your vault, exactly as the Plural Star app would.
+- **🔔 pings.** When someone reacts 🔔 to a proxied message, the bot keeps the message ID and their user ID in memory only, so each person pings once per message. That memory is cleared after 7 days or when the bot restarts.
 
 ## 3. Where the data lives
 
@@ -42,7 +44,7 @@ We do not sell data, share it with advertisers, or use it for anything other tha
 
 ## 5. Removing your data
 
-- `/unlink` removes the bot from your vault's devices and deletes the stored key and secret for your Discord account, your proxy display-name format, your Sys Tag, and the proxy display-name formats you set for single members, both the global ones and the per-server ones.
+- `/unlink` removes the bot from your vault's devices and deletes the stored key and secret for your Discord account, your proxy display-name format, your Sys Tag, the proxy display-name formats you set for single members, and your 🔔 pings setting, both the global ones and the per-server ones.
 - Proxied-message records expire after 7 days on their own; deleting a proxied message removes its record immediately.
 - Server settings are removed when a moderator clears them or removes the bot.
 - For anything else, email The1Hanyou@gmail.com from an account that can prove it owns the Discord user in question.

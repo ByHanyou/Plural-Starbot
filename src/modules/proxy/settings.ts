@@ -9,9 +9,14 @@ const autoproxyKey = (userId: string): string => `autoproxy:${userId}`;
 const formatKey = (userId: string): string => `format:${userId}`;
 const sysTagKey = (userId: string): string => `systag:${userId}`;
 const memberFormatsKey = (userId: string): string => `memberFormats:${userId}`;
+const pingsKey = (userId: string): string => `pings:${userId}`;
 const USER_FORMAT = 'proxy:format';
 const USER_SYS_TAG = 'proxy:systag';
 const USER_MEMBER_FORMATS = 'proxy:memberFormats';
+const USER_PINGS = 'proxy:pings';
+
+export const PINGS_ON = 'on';
+export const PINGS_OFF = 'off';
 
 const memberFormats = (v: unknown): Map<string, string> =>
   new Map(isRecord(v) ? Object.entries(v).filter((e): e is [string, string] => typeof e[1] === 'string' && !!e[1].trim()) : []);
@@ -81,11 +86,19 @@ export const setMemberFormat = (guildId: string | null, userId: string, memberId
 export const setSysTag = (guildId: string | null, userId: string, sysTag: string | null): void =>
   setScoped(guildId, userId, sysTagKey(userId), USER_SYS_TAG, sysTag);
 
-export const forgetNameSettings = (userId: string): void => {
+export const getPings = (guildId: string | null, userId: string): Resolved =>
+  resolveSetting(serverValue(guildId, pingsKey(userId)), db().getUserSetting(userId, USER_PINGS), PINGS_ON);
+
+export const setPings = (guildId: string | null, userId: string, state: string): void =>
+  setScoped(guildId, userId, pingsKey(userId), USER_PINGS, guildId || state !== PINGS_ON ? state : null);
+
+export const forgetProxySettings = (userId: string): void => {
   db().deleteUserSetting(userId, USER_FORMAT);
   db().deleteUserSetting(userId, USER_SYS_TAG);
   db().deleteUserSetting(userId, USER_MEMBER_FORMATS);
+  db().deleteUserSetting(userId, USER_PINGS);
   db().deleteGuildSettingInAllGuilds(MODULE, formatKey(userId));
   db().deleteGuildSettingInAllGuilds(MODULE, sysTagKey(userId));
   db().deleteGuildSettingInAllGuilds(MODULE, memberFormatsKey(userId));
+  db().deleteGuildSettingInAllGuilds(MODULE, pingsKey(userId));
 };
