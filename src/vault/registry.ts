@@ -61,6 +61,17 @@ export const hasStoredLink = (userId: string): boolean => opts().links.has(userI
 
 export const allSessions = (): VaultSession[] => [...sessions.values()];
 
+export const vaultMemory = (): {sessions: number; media: number; data: number} => {
+  let media = 0;
+  let data = 0;
+  for (const s of sessions.values()) {
+    const b = s.platform.bytes();
+    media += b.media;
+    data += b.data;
+  }
+  return {sessions: sessions.size, media, data};
+};
+
 export const dropSession = (userId: string): void => {
   const s = sessions.get(userId);
   if (!s) return;

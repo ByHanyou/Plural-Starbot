@@ -5,6 +5,7 @@ import {VAULT_KDF} from '../cloud/cloudCrypto';
 import type {CloudLimits, CloudLinkState, CloudTransport} from '../cloud/cloudTypes';
 import {tunables} from '../config';
 import {fetchTransport} from './transport';
+import {MEDIA_PREFIX} from './types';
 
 const contentHash = (s: string): string => {
   let h = 0x811c9dc5;
@@ -139,6 +140,16 @@ export class MemoryPlatform extends EventEmitter implements CloudPlatform {
 
   link(): CloudLinkState | null {
     return this.linkState;
+  }
+
+  bytes(): {media: number; data: number} {
+    let media = 0;
+    let data = 0;
+    for (const [k, v] of this.data) {
+      if (k.startsWith(MEDIA_PREFIX)) media += v.length;
+      else data += v.length;
+    }
+    return {media, data};
   }
 
   clear(): void {

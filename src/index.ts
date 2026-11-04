@@ -22,6 +22,7 @@ import {startAvatarServer} from './avatars';
 import {Config, ConfigError, loadConfig, setConfig} from './config';
 import {closeDb, db, dbLinkStore, openDb, startPurgeJob} from './db';
 import {log, setLogLevel} from './log';
+import {startMemoryLog} from './memoryLog';
 import {BotModule, commandJSON} from './modules/types';
 import {errorText} from './util';
 import {configureRegistry, loadAllSessions, stopAllSessions} from './vault/registry';
@@ -138,6 +139,7 @@ const main = async (): Promise<void> => {
     ],
     partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
+  const stopMemoryLog = startMemoryLog(client);
 
   const syncGuild = async (guild: Guild): Promise<number> => {
     try {
@@ -271,6 +273,7 @@ const main = async (): Promise<void> => {
     } catch (e) {
       log.exception(e, 'Error during shutdown.');
     }
+    stopMemoryLog();
     stopPurge();
     closeDb();
     log.info('Stopped.');
