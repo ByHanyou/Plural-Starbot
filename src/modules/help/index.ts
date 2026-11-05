@@ -25,7 +25,7 @@ const PAGES: Page[] = [
   {
     title: 'Linking, profiles and front',
     rows: [
-      {command: '`/help`', options: 'None', does: 'Lists every command. Only you see it.', where: 'Server, DM', who: 'Anyone'},
+      {command: '`/help`', options: 'None', does: 'Lists every command.', where: 'Server, DM', who: 'Anyone. Anyone can turn pages'},
       {command: '`/link`', options: `Password, asked in a pop-up. With \`${prefix()}link\`, press the **Enter password** button first`, does: 'Links your Plural Star cloud vault to your Discord account. It never creates a vault.', where: 'DM only', who: 'Anyone'},
       {command: '`/unlink`', options: 'None. Confirm with **Unlink** or **Cancel**', does: 'Removes the bot from your vault and deletes its key and your bot settings (format, Sys Tag, member formats).', where: 'DM only', who: 'Anyone'},
       {command: '`/member`', options: '`name` (required: name or nickname) · `user` (optional)', does: 'Member card. Page 1 is the profile; Custom Fields follow on more pages with **Previous** / **Next** buttons.', where: 'Server', who: 'Anyone. Anyone can turn pages'},
@@ -123,7 +123,7 @@ const helpCard = (page: number): (ContainerBuilder | ActionRowBuilder<ButtonBuil
 };
 
 const onHelp = async (ctx: CommandContext): Promise<void> => {
-  await ctx.reply({components: helpCard(0), flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2});
+  await ctx.reply({components: helpCard(0), flags: MessageFlags.IsComponentsV2});
 };
 
 const onPage = async (i: ButtonInteraction): Promise<void> => {
