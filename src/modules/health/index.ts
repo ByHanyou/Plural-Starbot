@@ -1,19 +1,14 @@
-import {Client, Events, Interaction} from 'discord.js';
+import {Client, Events} from 'discord.js';
 import {log} from '../../log';
 import type {BotModule} from '../types';
 import {dropContent} from './memory';
 import {dropSettings, guildsWithStoredSettings} from './settings';
 import {ensureLoop, forgetRolelessWarnings, stopLoop} from './delivery';
-import {handleHealth, healthCommand} from './commands';
+import {healthCommand} from './commands';
 
 const health: BotModule = {
   name: 'health',
   commands: [healthCommand],
-
-  async onInteraction(interaction: Interaction): Promise<void> {
-    if (!interaction.isChatInputCommand() || interaction.commandName !== 'health') return;
-    await handleHealth(interaction);
-  },
 
   onReady(client: Client<true>): void {
     for (const guildId of guildsWithStoredSettings()) {

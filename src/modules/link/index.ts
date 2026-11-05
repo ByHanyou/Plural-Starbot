@@ -1,20 +1,18 @@
 import {
   ActionRowBuilder,
-  ApplicationIntegrationType,
   ButtonBuilder,
   ButtonInteraction,
   ButtonStyle,
-  ChatInputCommandInteraction,
   Interaction,
   InteractionContextType,
   MessageFlags,
   ModalBuilder,
   ModalSubmitInteraction,
-  SlashCommandBuilder,
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
 import {CloudError} from '../../cloud/cloudTypes';
+import type {Command, CommandContext} from '../../discord/commands';
 import {log} from '../../log';
 import {errorText} from '../../util';
 import {dropSession, getSession, hasStoredLink, peekSession} from '../../vault/registry';
@@ -25,32 +23,28 @@ import type {BotModule} from '../types';
 
 const MODAL_ID = 'link:password';
 const PASSWORD_FIELD = 'password';
+const OPEN_ID = 'link:open';
 const UNLINK_CONFIRM = 'link:unlink-confirm';
 const UNLINK_CANCEL = 'link:unlink-cancel';
 
-const inBotDm = (i: ChatInputCommandInteraction | ModalSubmitInteraction | ButtonInteraction): boolean =>
-  i.context !== null && i.context !== undefined ? i.context === InteractionContextType.BotDM : !i.inGuild();
+type Clickable = ModalSubmitInteraction | ButtonInteraction;
+
+const inBotDm = (i: Clickable): boolean => (i.context !== null && i.context !== undefined ? i.context === InteractionContextType.BotDM : !i.inGuild());
 
 const dmOnly = (command: string): string =>
   `For your safety, \`/${command}\` only works in a direct message with me. Open a DM with Plural Starbot (click my name, then **Message**) and run \`/${command}\` there.`;
 
-const refuseOutsideDm = async (i: ChatInputCommandInteraction | ModalSubmitInteraction | ButtonInteraction, command: string): Promise<boolean> => {
+const refuseOutsideDm = async (i: Clickable, command: string): Promise<boolean> => {
   if (inBotDm(i)) return false;
   await i.reply({content: dmOnly(command), flags: MessageFlags.Ephemeral});
   return true;
 };
 
-const linkCommand = new SlashCommandBuilder()
-  .setName('link')
-  .setDescription('Link your Plural Star cloud vault (works in a DM with the bot)')
-  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
-  .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM);
-
-const unlinkCommand = new SlashCommandBuilder()
-  .setName('unlink')
-  .setDescription('Unlink your Plural Star cloud vault from the bot (works in a DM with the bot)')
-  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
-  .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM);
+const refuseOutsideDmCtx = async (ctx: CommandContext, command: string): Promise<boolean> => {
+  if (!ctx.inGuild()) return false;
+  await ctx.reply({content: dmOnly(command), flags: MessageFlags.Ephemeral});
+  return true;
+};
 
 const STAGE_TEXT: Record<LinkStage, string> = {
   queued: '⏳ Other vaults are being linked right now; yours starts in a moment…',
@@ -87,18 +81,21 @@ const cloudErrorText = (e: unknown): string => {
   return String(e);
 };
 
-const handleLink = async (i: ChatInputCommandInteraction): Promise<void> => {
-  if (await refuseOutsideDm(i, 'link')) return;
-  if (hasStoredLink(i.user.id)) {
-    await i.reply({content: alreadyLinked(i.user.id, peekSession(i.user.id)?.system()?.name || '')});
-    return;
+const canStartLink = async (userId: string, say: (content: string) => Promise<void>): Promise<boolean> => {
+  if (hasStoredLink(userId)) {
+    await say(alreadyLinked(userId, peekSession(userId)?.system()?.name || ''));
+    return false;
   }
-  const wait = linkAttempts().retryInMs(i.user.id);
+  const wait = linkAttempts().retryInMs(userId);
   if (wait > 0) {
-    await i.reply({content: tooManyAttempts(wait)});
-    return;
+    await say(tooManyAttempts(wait));
+    return false;
   }
-  const modal = new ModalBuilder()
+  return true;
+};
+
+const passwordModal = (): ModalBuilder =>
+  new ModalBuilder()
     .setCustomId(MODAL_ID)
     .setTitle('Link your Plural Star vault')
     .addComponents(
@@ -112,7 +109,30 @@ const handleLink = async (i: ChatInputCommandInteraction): Promise<void> => {
           .setMaxLength(256),
       ),
     );
-  await i.showModal(modal);
+
+const openButton = (): ActionRowBuilder<ButtonBuilder> =>
+  new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(OPEN_ID).setLabel('Enter password').setStyle(ButtonStyle.Primary));
+
+const handleLink = async (ctx: CommandContext): Promise<void> => {
+  if (await refuseOutsideDmCtx(ctx, 'link')) return;
+  if (!(await canStartLink(ctx.userId, content => ctx.reply({content})))) return;
+  if (ctx.interaction) {
+    await ctx.interaction.showModal(passwordModal());
+    return;
+  }
+  await ctx.reply({
+    content: 'Press the button to enter your Plural Star cloud password. It goes into a pop-up, never into the chat.',
+    components: [openButton()],
+  });
+};
+
+const handleOpenButton = async (i: ButtonInteraction): Promise<void> => {
+  if (await refuseOutsideDm(i, 'link')) return;
+  const say = async (content: string): Promise<void> => {
+    await i.reply({content});
+  };
+  if (!(await canStartLink(i.user.id, say))) return;
+  await i.showModal(passwordModal());
 };
 
 const handlePasswordModal = async (i: ModalSubmitInteraction): Promise<void> => {
@@ -168,14 +188,14 @@ const unlinkButtons = (): ActionRowBuilder<ButtonBuilder> =>
     new ButtonBuilder().setCustomId(UNLINK_CANCEL).setLabel('Cancel').setStyle(ButtonStyle.Secondary),
   );
 
-const handleUnlink = async (i: ChatInputCommandInteraction): Promise<void> => {
-  if (await refuseOutsideDm(i, 'unlink')) return;
-  if (!hasStoredLink(i.user.id)) {
-    await i.reply({content: 'No vault is linked to your Discord account.'});
+const handleUnlink = async (ctx: CommandContext): Promise<void> => {
+  if (await refuseOutsideDmCtx(ctx, 'unlink')) return;
+  if (!hasStoredLink(ctx.userId)) {
+    await ctx.reply({content: 'No vault is linked to your Discord account.'});
     return;
   }
-  const name = peekSession(i.user.id)?.system()?.name || '';
-  await i.reply({
+  const name = peekSession(ctx.userId)?.system()?.name || '';
+  await ctx.reply({
     content:
       `Unlink ${systemLabel(name)}? This removes the Plural Starbot device from your vault and deletes the key the bot holds for you. ` +
       'Proxying, profiles and front commands stop working until you link again.',
@@ -212,22 +232,27 @@ const handleUnlinkButton = async (i: ButtonInteraction): Promise<void> => {
   }
 };
 
+const linkCommand: Command = {
+  def: {name: 'link', description: 'Link your Plural Star cloud vault (works in a DM with the bot)', dm: true},
+  run: handleLink,
+};
+
+const unlinkCommand: Command = {
+  def: {name: 'unlink', description: 'Unlink your Plural Star cloud vault from the bot (works in a DM with the bot)', dm: true},
+  run: handleUnlink,
+};
+
 const link: BotModule = {
   name: 'link',
   commands: [linkCommand, unlinkCommand],
   async onInteraction(interaction: Interaction): Promise<void> {
-    if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'link') await handleLink(interaction);
-      else if (interaction.commandName === 'unlink') await handleUnlink(interaction);
-      return;
-    }
     if (interaction.isModalSubmit() && interaction.customId === MODAL_ID) {
       await handlePasswordModal(interaction);
       return;
     }
-    if (interaction.isButton() && (interaction.customId === UNLINK_CONFIRM || interaction.customId === UNLINK_CANCEL)) {
-      await handleUnlinkButton(interaction);
-    }
+    if (!interaction.isButton()) return;
+    if (interaction.customId === OPEN_ID) await handleOpenButton(interaction);
+    else if (interaction.customId === UNLINK_CONFIRM || interaction.customId === UNLINK_CANCEL) await handleUnlinkButton(interaction);
   },
 };
 

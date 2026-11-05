@@ -34,6 +34,7 @@ export interface Tunables {
 
 export interface Config {
   discordToken: string;
+  commandPrefix: string;
   cloudNodeUrl: string;
   avatarBaseUrl: string;
   avatarPort: number;
@@ -82,6 +83,7 @@ const DEFAULT_TUNABLES: Tunables = {
 const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 const TOKEN_PLACEHOLDER = 'paste-your-bot-token-here';
+const DEFAULT_COMMAND_PREFIX = 'psb!';
 
 const unquote = (v: string): string => {
   const t = v.trim();
@@ -145,6 +147,16 @@ const logLevel = (raw: string | undefined, problems: string[]): LogLevel => {
   if (found) return found;
   problems.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}, got: ${raw}`);
   return 'info';
+};
+
+const commandPrefix = (raw: string | undefined, problems: string[]): string => {
+  const v = (raw || '').trim();
+  if (!v) return DEFAULT_COMMAND_PREFIX;
+  if (/\s/.test(v) || v.length > 10) {
+    problems.push(`COMMAND_PREFIX must be 1-10 characters with no spaces, got: ${raw}`);
+    return DEFAULT_COMMAND_PREFIX;
+  }
+  return v;
 };
 
 const snowflake = (name: string, raw: string | undefined, problems: string[]): string | null => {
@@ -225,6 +237,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env, envFile = resol
   if (!dataDirRaw) problems.push('DATA_DIR is not set.');
 
   const level = logLevel(env.LOG_LEVEL, problems);
+  const prefix = commandPrefix(env.COMMAND_PREFIX, problems);
   const devGuildId = snowflake('DEV_GUILD_ID', env.DEV_GUILD_ID, problems);
   const tunables = loadTunables(env, problems);
 
@@ -236,6 +249,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env, envFile = resol
 
   return {
     discordToken: token,
+    commandPrefix: prefix,
     cloudNodeUrl,
     avatarBaseUrl,
     avatarPort,

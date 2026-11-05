@@ -1,11 +1,5 @@
-import {
-  ChannelType,
-  ChatInputCommandInteraction,
-  MessageFlags,
-  PermissionFlagsBits,
-  SlashCommandBuilder,
-  SlashCommandStringOption,
-} from 'discord.js';
+import {MessageFlags, PermissionFlagsBits} from 'discord.js';
+import type {Command, CommandContext, OptionDef} from '../../discord/commands';
 import {MISSING_PERMISSION} from '../replies';
 import {groupSchedule, groupTimesLabel, isValidInterval, parseStartTime, timesLabel} from './schedule';
 import {getSettings, HealthGroup, saveSettings} from './settings';
@@ -23,65 +17,7 @@ const GROUP_CHOICES = [
   {name: 'Kindness (self + others + animals + world)', value: 'Kindness'},
 ];
 
-const groupOption = (o: SlashCommandStringOption): SlashCommandStringOption =>
-  o.setName('group').setDescription('Which reminder group').setRequired(true).addChoices(...GROUP_CHOICES);
-
-export const healthCommand = new SlashCommandBuilder()
-  .setName('health')
-  .setDescription('Configure the health reminder bot')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addSubcommand(c => c.setName('show').setDescription('Show the current settings and schedule'))
-  .addSubcommand(c =>
-    c
-      .setName('channel')
-      .setDescription('Set the channel where reminders are posted')
-      .addChannelOption(o =>
-        o
-          .setName('channel')
-          .setDescription('The text channel to post reminders in')
-          .setRequired(true)
-          .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
-      ),
-  )
-  .addSubcommand(c =>
-    c
-      .setName('role')
-      .setDescription('Choose the role to ping for a reminder group')
-      .addStringOption(groupOption)
-      .addRoleOption(o => o.setName('role').setDescription('The role to ping').setRequired(true)),
-  )
-  .addSubcommand(c =>
-    c
-      .setName('starttime')
-      .setDescription("Set the shared schedule's first ping of the day (24-hour HH:MM)")
-      .addStringOption(o => o.setName('time').setDescription('24-hour time, e.g. 08:00 or 14:30').setRequired(true)),
-  )
-  .addSubcommand(c =>
-    c
-      .setName('interval')
-      .setDescription("Set the shared schedule's hours between pings (must divide 24)")
-      .addIntegerOption(o => o.setName('hours').setDescription('Hours between pings: 1, 2, 3, 4, 6, 8, 12, or 24').setRequired(true)),
-  )
-  .addSubcommand(c =>
-    c
-      .setName('groupschedule')
-      .setDescription('Give one group its own schedule, or send it back to the shared one')
-      .addStringOption(groupOption)
-      .addStringOption(o => o.setName('time').setDescription("This group's first ping of the day, 24-hour HH:MM"))
-      .addIntegerOption(o => o.setName('hours').setDescription("This group's hours between pings: 1, 2, 3, 4, 6, 8, 12, or 24"))
-      .addBooleanOption(o => o.setName('shared').setDescription('True = drop this group\'s own schedule and follow the shared one again')),
-  )
-  .addSubcommand(c =>
-    c
-      .setName('timezone')
-      .setDescription('Set the timezone (IANA name)')
-      .addStringOption(o =>
-        o.setName('name').setDescription('IANA timezone, e.g. America/New_York, America/Chicago, Europe/London').setRequired(true),
-      ),
-  )
-  .addSubcommand(c => c.setName('enable').setDescription('Turn the scheduled reminders on'))
-  .addSubcommand(c => c.setName('disable').setDescription('Pause the scheduled reminders'))
-  .addSubcommand(c => c.setName('test').setDescription('Send one round of reminders right now'));
+const groupOption: OptionDef = {name: 'group', description: 'Which reminder group', type: 'string', required: true, choices: GROUP_CHOICES};
 
 const ephemeral = MessageFlags.Ephemeral;
 
@@ -90,7 +26,7 @@ const BAD_INTERVAL = '❌ Interval must be one of 1, 2, 3, 4, 6, 8, 12, or 24.';
 
 const hasOwnSchedule = (g: HealthGroup): boolean => !!(g.start_time || g.interval_hours);
 
-const healthShow = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthShow = async (i: CommandContext, guildId: string): Promise<void> => {
   const s = getSettings(guildId);
   const channel = s.channel_id ? `<#${s.channel_id}>` : '*not set, use /health channel*';
   const lines = [
@@ -113,7 +49,7 @@ const healthShow = async (i: ChatInputCommandInteraction, guildId: string): Prom
   await i.reply({content: lines.join('\n'), flags: ephemeral, allowedMentions: QUIET});
 };
 
-const healthChannel = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthChannel = async (i: CommandContext, guildId: string): Promise<void> => {
   const channel = i.options.getChannel('channel', true);
   const s = getSettings(guildId);
   s.channel_id = channel.id;
@@ -122,7 +58,7 @@ const healthChannel = async (i: ChatInputCommandInteraction, guildId: string): P
   await i.reply({content: `✅ Reminders will post in <#${channel.id}>.`, flags: ephemeral, allowedMentions: QUIET});
 };
 
-const healthRole = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthRole = async (i: CommandContext, guildId: string): Promise<void> => {
   const group = i.options.getString('group', true);
   const role = i.options.getRole('role', true);
   const s = getSettings(guildId);
@@ -134,7 +70,7 @@ const healthRole = async (i: ChatInputCommandInteraction, guildId: string): Prom
   await i.reply({content: `✅ ${group} reminders will ping ${mention}.`, flags: ephemeral, allowedMentions: QUIET});
 };
 
-const healthStartTime = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthStartTime = async (i: CommandContext, guildId: string): Promise<void> => {
   const parsed = parseStartTime(i.options.getString('time', true));
   if (parsed === null) {
     await i.reply({content: BAD_TIME, flags: ephemeral});
@@ -147,7 +83,7 @@ const healthStartTime = async (i: ChatInputCommandInteraction, guildId: string):
   await i.reply({content: `✅ Start time set. Now firing at: \`${timesLabel(s)}\` (${s.timezone}).`, flags: ephemeral});
 };
 
-const healthInterval = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthInterval = async (i: CommandContext, guildId: string): Promise<void> => {
   const hours = i.options.getInteger('hours', true);
   if (!isValidInterval(hours)) {
     await i.reply({content: BAD_INTERVAL, flags: ephemeral});
@@ -160,7 +96,7 @@ const healthInterval = async (i: ChatInputCommandInteraction, guildId: string): 
   await i.reply({content: `✅ Now pinging every ${hours}h. Firing at: \`${timesLabel(s)}\`.`, flags: ephemeral});
 };
 
-const healthGroupSchedule = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthGroupSchedule = async (i: CommandContext, guildId: string): Promise<void> => {
   const group = i.options.getString('group', true);
   const time = i.options.getString('time');
   const hours = i.options.getInteger('hours');
@@ -220,7 +156,7 @@ const healthGroupSchedule = async (i: ChatInputCommandInteraction, guildId: stri
   });
 };
 
-const healthTimezone = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthTimezone = async (i: CommandContext, guildId: string): Promise<void> => {
   const name = i.options.getString('name', true);
   if (!isValidZone(name)) {
     await i.reply({content: '❌ Unknown timezone. Use an IANA name like `America/Chicago` or `Europe/London`.', flags: ephemeral});
@@ -233,7 +169,7 @@ const healthTimezone = async (i: ChatInputCommandInteraction, guildId: string): 
   await i.reply({content: `✅ Timezone set to \`${name}\`. Firing at: \`${timesLabel(s)}\`.`, flags: ephemeral});
 };
 
-const healthEnable = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthEnable = async (i: CommandContext, guildId: string): Promise<void> => {
   const s = getSettings(guildId);
   s.enabled = true;
   saveSettings(guildId, s);
@@ -241,7 +177,7 @@ const healthEnable = async (i: ChatInputCommandInteraction, guildId: string): Pr
   await i.reply({content: `🟢 Reminders are on. Next times: \`${timesLabel(s)}\`.`, flags: ephemeral});
 };
 
-const healthDisable = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthDisable = async (i: CommandContext, guildId: string): Promise<void> => {
   const s = getSettings(guildId);
   s.enabled = false;
   saveSettings(guildId, s);
@@ -249,7 +185,7 @@ const healthDisable = async (i: ChatInputCommandInteraction, guildId: string): P
   await i.reply({content: '🔴 Reminders paused. Use /health enable to resume. (/health test still works.)', flags: ephemeral});
 };
 
-const healthTest = async (i: ChatInputCommandInteraction, guildId: string): Promise<void> => {
+const healthTest = async (i: CommandContext, guildId: string): Promise<void> => {
   const s = getSettings(guildId);
   const channel = await getChannelOrNone(i.client, s);
   if (!channel) {
@@ -264,7 +200,7 @@ const healthTest = async (i: ChatInputCommandInteraction, guildId: string): Prom
   await sendRound(i.client, guildId, channel, null);
 };
 
-const HANDLERS = new Map<string, (i: ChatInputCommandInteraction, guildId: string) => Promise<void>>([
+const HANDLERS = new Map<string, (i: CommandContext, guildId: string) => Promise<void>>([
   ['show', healthShow],
   ['channel', healthChannel],
   ['role', healthRole],
@@ -277,7 +213,7 @@ const HANDLERS = new Map<string, (i: ChatInputCommandInteraction, guildId: strin
   ['test', healthTest],
 ]);
 
-export const handleHealth = async (interaction: ChatInputCommandInteraction): Promise<void> => {
+export const handleHealth = async (interaction: CommandContext): Promise<void> => {
   if (!interaction.inGuild()) return;
   if (!interaction.memberPermissions.has(PermissionFlagsBits.ManageGuild)) {
     await interaction.reply({content: MISSING_PERMISSION, flags: ephemeral});
@@ -286,4 +222,54 @@ export const handleHealth = async (interaction: ChatInputCommandInteraction): Pr
   const handler = HANDLERS.get(interaction.options.getSubcommand());
   if (!handler) return;
   await handler(interaction, interaction.guildId);
+};
+
+export const healthCommand: Command = {
+  def: {
+    name: 'health',
+    description: 'Configure the health reminder bot',
+    permissions: PermissionFlagsBits.ManageGuild,
+    subcommands: [
+      {name: 'show', description: 'Show the current settings and schedule'},
+      {
+        name: 'channel',
+        description: 'Set the channel where reminders are posted',
+        options: [{name: 'channel', description: 'The text channel to post reminders in', type: 'channel', required: true}],
+      },
+      {
+        name: 'role',
+        description: 'Choose the role to ping for a reminder group',
+        options: [groupOption, {name: 'role', description: 'The role to ping', type: 'role', required: true}],
+      },
+      {
+        name: 'starttime',
+        description: "Set the shared schedule's first ping of the day (24-hour HH:MM)",
+        options: [{name: 'time', description: '24-hour time, e.g. 08:00 or 14:30', type: 'string', required: true}],
+      },
+      {
+        name: 'interval',
+        description: "Set the shared schedule's hours between pings (must divide 24)",
+        options: [{name: 'hours', description: 'Hours between pings: 1, 2, 3, 4, 6, 8, 12, or 24', type: 'integer', required: true}],
+      },
+      {
+        name: 'groupschedule',
+        description: 'Give one group its own schedule, or send it back to the shared one',
+        options: [
+          groupOption,
+          {name: 'time', description: "This group's first ping of the day, 24-hour HH:MM", type: 'string'},
+          {name: 'hours', description: "This group's hours between pings: 1, 2, 3, 4, 6, 8, 12, or 24", type: 'integer'},
+          {name: 'shared', description: "True = drop this group's own schedule and follow the shared one again", type: 'boolean'},
+        ],
+      },
+      {
+        name: 'timezone',
+        description: 'Set the timezone (IANA name)',
+        options: [{name: 'name', description: 'IANA timezone, e.g. America/New_York, America/Chicago, Europe/London', type: 'string', required: true}],
+      },
+      {name: 'enable', description: 'Turn the scheduled reminders on'},
+      {name: 'disable', description: 'Pause the scheduled reminders'},
+      {name: 'test', description: 'Send one round of reminders right now'},
+    ],
+  },
+  run: handleHealth,
 };

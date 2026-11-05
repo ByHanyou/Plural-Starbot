@@ -70,6 +70,8 @@ export interface CloudPlatform {
   skipMediaReupload?: boolean;
   argon2id?(password: string, salt: Uint8Array): Promise<Uint8Array>;
   readMedia?(ref: string): Promise<string | null>;
+  deferMedia?(entry: ManifestEntry): string;
+  mediaHashOf?(raw: string): string | null;
 }
 
 const isKeyRouteMissing = (e: unknown): boolean => isCloudKind(e, 'ROUTE_MISSING');
@@ -540,6 +542,28 @@ export class CloudService {
     return this.keyHash(key, raw);
   }
 
+  async fetchMedia(key: string): Promise<Uint8Array | null> {
+    const link = this.link;
+    const entry = link?.known[key];
+    if (!link || !entry?.id) return null;
+    await this.ensureDeviceKey();
+    const read = async (): Promise<Uint8Array> => this.api().getObject(await this.creds(link), entry.id);
+    let ct: Uint8Array;
+    try {
+      try {
+        ct = await read();
+      } catch (e) {
+        if (this.link !== link || !(await this.recoverDeviceKey(link, e))) throw e;
+        ct = await read();
+      }
+    } catch (e) {
+      if (isCloudKind(e, 'NOT_FOUND')) return null;
+      throw e;
+    }
+    if (objectIdOf(ct) !== entry.id) return null;
+    return decryptBytes(this.key(), ct);
+  }
+
   syncNow(phase: CloudPhase): Promise<void> {
     return this.runSync(phase);
   }
@@ -689,6 +713,8 @@ export class CloudService {
 
   private async localKeyHash(key: string, raw: string): Promise<string | null> {
     if (!raw.startsWith(CLOUD_MEDIA_REF)) return this.keyHash(key, raw);
+    const own = this.p.mediaHashOf?.(raw);
+    if (own) return own;
     const memo = this.mediaHashMemo.get(raw);
     if (memo !== undefined) return memo;
     const data = await this.resolveMedia(raw);
@@ -936,6 +962,14 @@ export class CloudService {
     let tombstonesRaw: string | null = null;
     let done = 0;
     for (const e of entries) {
+      if (isMediaKey(e.path) && this.p.deferMedia) {
+        values[e.path] = this.p.deferMedia(e);
+        landed[e.path] = e.hash;
+        done++;
+        this.progress = done / entries.length;
+        this.emit();
+        continue;
+      }
       let ct: Uint8Array;
       try {
         ct = await api.getObject(vc, e.id);

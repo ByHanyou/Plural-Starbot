@@ -1,4 +1,5 @@
 import type {Client} from 'discord.js';
+import {avatarCacheBytes} from './avatars';
 import {log} from './log';
 import {vaultMemory} from './vault/registry';
 
@@ -14,7 +15,7 @@ const report = (client: Client): void => {
   for (const g of client.guilds.cache.values()) members += g.members.cache.size;
   for (const c of client.channels.cache.values()) if (c.isTextBased()) messages += c.messages.cache.size;
   log.info(
-    'Memory: heap %d/%d MB, rss %d MB, external %d MB, array buffers %d MB; vaults %d (media %d MB, data %d MB); discord cache: users %d, channels %d, members %d, messages %d.',
+    'Memory: heap %d/%d MB, rss %d MB, external %d MB, array buffers %d MB; vaults %d (media %d MB, data %d MB); avatar cache %d MB; discord cache: users %d, channels %d, members %d, messages %d.',
     mb(m.heapUsed),
     mb(m.heapTotal),
     mb(m.rss),
@@ -23,6 +24,7 @@ const report = (client: Client): void => {
     v.sessions,
     mb(v.media),
     mb(v.data),
+    mb(avatarCacheBytes()),
     client.users.cache.size,
     client.channels.cache.size,
     members,

@@ -1,5 +1,6 @@
-import {APIEmbed, ButtonInteraction, ChatInputCommandInteraction, escapeMarkdown, MessageFlags, SlashCommandBuilder, User} from 'discord.js';
+import {APIEmbed, ButtonInteraction, escapeMarkdown, MessageFlags, User} from 'discord.js';
 import {avatarUrlFor} from '../../avatars';
+import type {Command, CommandContext, OptionDef} from '../../discord/commands';
 import {CloudError, isCloudKind} from '../../cloud/cloudTypes';
 import {tunables} from '../../config';
 import {log} from '../../log';
@@ -14,7 +15,7 @@ import {findByName, isShown, nameCandidates, visibleMembers} from './lookup';
 import type {MentionNames} from './richText';
 
 const NOT_LINKED = 'Link your vault first: DM me /link';
-const NOT_LOADED = 'That vault could not be read just now. Try again in a minute.';
+export const NOT_LOADED = 'That vault could not be read just now. Try again in a minute.';
 const NOBODY = 'Nobody is fronting.';
 const GONE = 'This profile is no longer available.';
 
@@ -29,75 +30,36 @@ const TIER_OF = new Map<string, FrontTierKey>([
   ['coconscious', 'coConscious'],
 ]);
 
-const tierOption = (i: ChatInputCommandInteraction): FrontTierKey => TIER_OF.get(i.options.getString('tier') ?? 'primary') ?? 'primary';
+const tierOption = (i: CommandContext): FrontTierKey => TIER_OF.get(i.options.getString('tier') ?? 'primary') ?? 'primary';
 
 const PROFILE_KEYS = [VAULT_KEYS.members, VAULT_KEYS.front, VAULT_KEYS.history, VAULT_KEYS.system];
 
-export const memberCommand = new SlashCommandBuilder()
-  .setName('member')
-  .setDescription("Show a member's profile")
-  .addStringOption(o => o.setName('name').setDescription('Member name or nickname').setRequired(true).setMaxLength(100))
-  .addUserOption(o => o.setName('user').setDescription("Leave empty for your own system; pick someone to view theirs"));
-
-export const systemCommand = new SlashCommandBuilder()
-  .setName('system')
-  .setDescription("Show a system's profile")
-  .addUserOption(o => o.setName('user').setDescription("Leave empty for your own system; pick someone to view theirs"));
-
-export const frontCommand = new SlashCommandBuilder()
-  .setName('front')
-  .setDescription('Who is fronting, or change the front')
-  .addSubcommand(s =>
-    s
-      .setName('show')
-      .setDescription('Who is fronting, by tier, with how long')
-      .addUserOption(o => o.setName('user').setDescription("Leave empty for your own system; pick someone to view theirs")),
-  )
-  .addSubcommand(s =>
-    s
-      .setName('set')
-      .setDescription('Add members to a tier, keeping who is already there (like Set Front in the app)')
-      .addStringOption(o => o.setName('member').setDescription('Member name, or several separated by commas').setRequired(true).setMaxLength(1000))
-      .addStringOption(o => o.setName('tier').setDescription('Tier (default: primary)').addChoices(...TIER_CHOICES)),
-  )
-  .addSubcommand(s =>
-    s
-      .setName('add')
-      .setDescription('Add a member to the front')
-      .addStringOption(o => o.setName('member').setDescription('Member name').setRequired(true).setMaxLength(100))
-      .addStringOption(o => o.setName('tier').setDescription('Tier (default: primary)').addChoices(...TIER_CHOICES)),
-  )
-  .addSubcommand(s =>
-    s
-      .setName('remove')
-      .setDescription('Take a member off the front')
-      .addStringOption(o => o.setName('member').setDescription('Member name').setRequired(true).setMaxLength(100)),
-  )
-  .addSubcommand(s => s.setName('clear').setDescription('Clear the front (every tier)'));
+const userOption: OptionDef = {name: 'user', description: 'Leave empty for your own system; pick someone to view theirs', type: 'user'};
+const tierOptionDef: OptionDef = {name: 'tier', description: 'Tier (default: primary)', type: 'string', choices: TIER_CHOICES};
 
 interface Payload {
   content?: string;
   embeds?: APIEmbed[];
 }
 
-const defer = (i: ChatInputCommandInteraction, onlyCaller: boolean): Promise<unknown> =>
+const defer = (i: CommandContext, onlyCaller: boolean): Promise<unknown> =>
   i.deferReply(onlyCaller ? {flags: MessageFlags.Ephemeral} : {});
 
-const say = async (i: ChatInputCommandInteraction, p: Payload): Promise<void> => {
+export const say = async (i: CommandContext, p: Payload): Promise<void> => {
   await i.editReply({content: p.content ?? '', embeds: p.embeds ?? [], allowedMentions: {parse: []}});
 };
 
-const sayCard = async (i: ChatInputCommandInteraction, components: CardComponents): Promise<void> => {
+const sayCard = async (i: CommandContext, components: CardComponents): Promise<void> => {
   await i.editReply({components, flags: MessageFlags.IsComponentsV2, allowedMentions: {parse: []}});
 };
 
-const guildOnly = async (i: ChatInputCommandInteraction): Promise<boolean> => {
+const guildOnly = async (i: CommandContext): Promise<boolean> => {
   if (i.inGuild()) return true;
   await i.reply({content: SERVER_ONLY, flags: MessageFlags.Ephemeral});
   return false;
 };
 
-const ownInMemory = (i: ChatInputCommandInteraction): VaultSession | null => {
+export const ownInMemory = (i: CommandContext): VaultSession | null => {
   const s = peekSession(i.user.id);
   return s?.isLinked() && s.isLoaded() ? s : null;
 };
@@ -107,13 +69,13 @@ const holds = (s: VaultSession, keys: string[]): boolean => {
   return keys.every(k => s.platform.get(k) !== undefined || !known[k]);
 };
 
-interface Target {
+export interface Target {
   session: VaultSession;
   user: User;
   own: boolean;
 }
 
-const targetOf = async (i: ChatInputCommandInteraction, user: User, maxAgeMs?: number): Promise<Target | null> => {
+export const targetOf = async (i: CommandContext, user: User, maxAgeMs?: number): Promise<Target | null> => {
   const own = user.id === i.user.id;
   let session: VaultSession | null;
   try {
@@ -146,7 +108,7 @@ const targetOf = async (i: ChatInputCommandInteraction, user: User, maxAgeMs?: n
   return {session, user, own};
 };
 
-const KEEPS_TRYING = 'Plural Starbot keeps trying; if the bot restarts before it gets through, the change is lost.';
+export const KEEPS_TRYING = 'Plural Starbot keeps trying; if the bot restarts before it gets through, the change is lost.';
 
 const pushProblem = (r: PushResult): string | null => {
   if (r.ok) return null;
@@ -177,9 +139,9 @@ const mentionNames = (members: Member[], showPrivate: boolean): MentionNames => 
   };
 };
 
-const bold = (s: string): string => `**${escapeMarkdown(s.trim())}**`;
-const noMember = (name: string): string => `No member named ${bold(name)}.`;
-const ambiguous = (name: string, count: number, prefix: boolean): string =>
+export const bold = (s: string): string => `**${escapeMarkdown(s.trim())}**`;
+export const noMember = (name: string): string => `No member named ${bold(name)}.`;
+export const ambiguous = (name: string, count: number, prefix: boolean): string =>
   prefix ? `${count} members start with ${bold(name)}. Type more of the name.` : `${count} members are called ${bold(name)}.`;
 
 const safeParse = (raw: string): unknown => {
@@ -221,7 +183,7 @@ const memberCardFor = (
     nav,
   });
 
-export const handleMember = async (i: ChatInputCommandInteraction): Promise<void> => {
+export const handleMember = async (i: CommandContext): Promise<void> => {
   if (!(await guildOnly(i))) return;
   const query = i.options.getString('name', true);
   const user = i.options.getUser('user') ?? i.user;
@@ -300,7 +262,7 @@ export const handleMemberPage = async (i: ButtonInteraction): Promise<void> => {
   else await i.update({components, flags: MessageFlags.IsComponentsV2, allowedMentions: {parse: []}});
 };
 
-export const handleSystem = async (i: ChatInputCommandInteraction): Promise<void> => {
+export const handleSystem = async (i: CommandContext): Promise<void> => {
   if (!(await guildOnly(i))) return;
   const user = i.options.getUser('user') ?? i.user;
   await defer(i, false);
@@ -327,7 +289,7 @@ const staleNote = (s: VaultSession): string | null => {
   return `⚠️ This front was last synced ${when}.`;
 };
 
-const showFront = async (i: ChatInputCommandInteraction, t: Target, showPrivate: boolean, note: string | null = null): Promise<void> => {
+const showFront = async (i: CommandContext, t: Target, showPrivate: boolean, note: string | null = null): Promise<void> => {
   const view = frontView({
     front: currentFront(t.session) ?? null,
     members: t.session.members(),
@@ -342,7 +304,7 @@ const showFront = async (i: ChatInputCommandInteraction, t: Target, showPrivate:
   else await say(i, {content: content ? `${content}\n${NOBODY}` : NOBODY});
 };
 
-const handleShow = async (i: ChatInputCommandInteraction): Promise<void> => {
+const handleShow = async (i: CommandContext): Promise<void> => {
   const user = i.options.getUser('user') ?? i.user;
   const own = user.id === i.user.id;
   const pre = own ? ownInMemory(i) : null;
@@ -356,7 +318,7 @@ const handleShow = async (i: ChatInputCommandInteraction): Promise<void> => {
   await showFront(i, t, onlyCaller);
 };
 
-const namesOf = (i: ChatInputCommandInteraction, sub: string): string[] => {
+const namesOf = (i: CommandContext, sub: string): string[] => {
   if (sub === 'clear') return [];
   const raw = i.options.getString('member', true);
   const list = sub === 'set' ? raw.split(',') : [raw];
@@ -372,7 +334,7 @@ const changeShowsPrivate = (s: VaultSession, sub: string, names: string[]): bool
   return named.some(m => m.private === true) || fronting.some(id => byId.get(id)?.private === true);
 };
 
-const changeFront = async (i: ChatInputCommandInteraction, sub: string): Promise<void> => {
+const changeFront = async (i: CommandContext, sub: string): Promise<void> => {
   const names = namesOf(i, sub);
   const pre = ownInMemory(i);
   const onlyCaller = !pre || changeShowsPrivate(pre, sub, names);
@@ -438,9 +400,46 @@ const changeFront = async (i: ChatInputCommandInteraction, sub: string): Promise
   await showFront(i, t, onlyCaller, problem);
 };
 
-export const handleFront = async (i: ChatInputCommandInteraction): Promise<void> => {
+export const handleFront = async (i: CommandContext): Promise<void> => {
   if (!(await guildOnly(i))) return;
   const sub = i.options.getSubcommand();
   if (sub === 'show') await handleShow(i);
   else if (sub === 'set' || sub === 'add' || sub === 'remove' || sub === 'clear') await changeFront(i, sub);
+};
+
+export const memberCommand: Command = {
+  def: {
+    name: 'member',
+    description: "Show a member's profile",
+    options: [{name: 'name', description: 'Member name or nickname', type: 'string', required: true, maxLength: 100}, userOption],
+  },
+  run: handleMember,
+};
+
+export const systemCommand: Command = {
+  def: {name: 'system', description: "Show a system's profile", options: [userOption]},
+  run: handleSystem,
+};
+
+export const frontCommand: Command = {
+  def: {
+    name: 'front',
+    description: 'Who is fronting, or change the front',
+    subcommands: [
+      {name: 'show', description: 'Who is fronting, by tier, with how long', options: [userOption]},
+      {
+        name: 'set',
+        description: 'Add members to a tier, keeping who is already there (like Set Front in the app)',
+        options: [{name: 'member', description: 'Member name, or several separated by commas', type: 'string', required: true, maxLength: 1000}, tierOptionDef],
+      },
+      {
+        name: 'add',
+        description: 'Add a member to the front',
+        options: [{name: 'member', description: 'Member name', type: 'string', required: true, maxLength: 100}, tierOptionDef],
+      },
+      {name: 'remove', description: 'Take a member off the front', options: [{name: 'member', description: 'Member name', type: 'string', required: true, maxLength: 100}]},
+      {name: 'clear', description: 'Clear the front (every tier)'},
+    ],
+  },
+  run: handleFront,
 };

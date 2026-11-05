@@ -1,24 +1,8 @@
-import {
-  ActionRowBuilder,
-  ApplicationIntegrationType,
-  ButtonBuilder,
-  ContainerBuilder,
-  InteractionContextType,
-  MessageFlags,
-  SlashCommandBuilder,
-  type ButtonInteraction,
-  type ChatInputCommandInteraction,
-  type Interaction,
-} from 'discord.js';
+import {ActionRowBuilder, ButtonBuilder, ContainerBuilder, MessageFlags, type ButtonInteraction, type Interaction} from 'discord.js';
 import {tunables} from '../../config';
+import {type Command, type CommandContext, prefix} from '../../discord/commands';
 import type {BotModule} from '../types';
 import {pagerRow} from '../pager';
-
-const helpCommand = new SlashCommandBuilder()
-  .setName('help')
-  .setDescription('Every Plural Starbot command, with what it does')
-  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
-  .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM);
 
 interface Row {
   command: string;
@@ -42,7 +26,7 @@ const PAGES: Page[] = [
     title: 'Linking, profiles and front',
     rows: [
       {command: '`/help`', options: 'None', does: 'Lists every command. Only you see it.', where: 'Server, DM', who: 'Anyone'},
-      {command: '`/link`', options: 'Password, asked in a pop-up', does: 'Links your Plural Star cloud vault to your Discord account. It never creates a vault.', where: 'DM only', who: 'Anyone'},
+      {command: '`/link`', options: `Password, asked in a pop-up. With \`${prefix()}link\`, press the **Enter password** button first`, does: 'Links your Plural Star cloud vault to your Discord account. It never creates a vault.', where: 'DM only', who: 'Anyone'},
       {command: '`/unlink`', options: 'None. Confirm with **Unlink** or **Cancel**', does: 'Removes the bot from your vault and deletes its key and your bot settings (format, Sys Tag, member formats).', where: 'DM only', who: 'Anyone'},
       {command: '`/member`', options: '`name` (required: name or nickname) · `user` (optional)', does: 'Member card. Page 1 is the profile; Custom Fields follow on more pages with **Previous** / **Next** buttons.', where: 'Server', who: 'Anyone. Anyone can turn pages'},
       {command: '`/system`', options: '`user` (optional)', does: 'System card: banner, name, avatar, description, count of non-private members, and the linked Discord account.', where: 'Server', who: 'Anyone'},
@@ -51,6 +35,20 @@ const PAGES: Page[] = [
       {command: '`/front add`', options: '`member` (required) · `tier` (optional)', does: 'Adds one member to a tier.', where: 'Server', who: 'Your own front'},
       {command: '`/front remove`', options: '`member` (required)', does: 'Takes a member off the front.', where: 'Server', who: 'Your own front'},
       {command: '`/front clear`', options: 'None', does: 'Clears every tier.', where: 'Server', who: 'Your own front'},
+      {
+        command: '`/edit member`',
+        options: '`member` (required) · `field` (required: name, nickname, pronouns, role, color, emoji, description, avatar, banner, or a custom field) · `value` (text, image link, or `clear`) · `image` (optional file)',
+        does: `Changes one field of one of your members. Text form: \`${prefix()}edit member Harper pronouns she/her\`; for an image attach a file: \`${prefix()}edit member Harper avatar\`.`,
+        where: 'Server, DM',
+        who: 'Your own vault',
+      },
+      {
+        command: '`/edit system`',
+        options: '`field` (required: name, description, avatar, banner) · `value` (text, image link, or `clear`) · `image` (optional file)',
+        does: 'Changes your system name, description, avatar or banner.',
+        where: 'Server, DM',
+        who: 'Your own vault',
+      },
     ],
     notes: ['**`tier`:** Primary (default), Co-Front, Co-Conscious.'],
   },
@@ -99,6 +97,15 @@ const PAGES: Page[] = [
 const rowText = (r: Row): string =>
   [`**${r.command}**`, `**Options:** ${r.options}`, `**Does:** ${r.does}`, `**Where:** ${r.where} · **Who:** ${r.who}`].join('\n');
 
+const textNote = (): string => {
+  const p = prefix();
+  return (
+    `-# Every command also works as a message starting with \`${p}\`, like \`${p}front show\`. Options go as \`name:value\`, like ` +
+    `\`${p}front set member:Harper tier:cofront\`; the first one can go without its name: \`${p}member Harper\`. ` +
+    'Replies that only you would see are sent to you in a DM.'
+  );
+};
+
 const helpCard = (page: number): (ContainerBuilder | ActionRowBuilder<ButtonBuilder>)[] => {
   const p = PAGES[page];
   const box = new ContainerBuilder();
@@ -109,14 +116,14 @@ const helpCard = (page: number): (ContainerBuilder | ActionRowBuilder<ButtonBuil
   }
   box.addSeparatorComponents(s => s);
   box.addTextDisplayComponents(t =>
-    t.setContent([...p.notes, '-# Private members in Plural Star are only ever shown to their own system.'].join('\n')),
+    t.setContent([...p.notes, textNote(), '-# Private members in Plural Star are only ever shown to their own system.'].join('\n')),
   );
   const nav = pagerRow({prev: `${PAGE_ID}${page - 1}`, label: PAGE_LABEL_ID, next: `${PAGE_ID}${page + 1}`}, page, PAGES.length);
   return [box, nav];
 };
 
-const onHelp = async (i: ChatInputCommandInteraction): Promise<void> => {
-  await i.reply({components: helpCard(0), flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2});
+const onHelp = async (ctx: CommandContext): Promise<void> => {
+  await ctx.reply({components: helpCard(0), flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2});
 };
 
 const onPage = async (i: ButtonInteraction): Promise<void> => {
@@ -128,12 +135,16 @@ const onPage = async (i: ButtonInteraction): Promise<void> => {
   await i.update({components: helpCard(page), flags: MessageFlags.IsComponentsV2});
 };
 
+const helpCommand: Command = {
+  def: {name: 'help', description: 'Every Plural Starbot command, with what it does', dm: true},
+  run: onHelp,
+};
+
 const help: BotModule = {
   name: 'help',
   commands: [helpCommand],
   async onInteraction(interaction: Interaction): Promise<void> {
-    if (interaction.isChatInputCommand() && interaction.commandName === 'help') await onHelp(interaction);
-    else if (interaction.isButton() && interaction.customId.startsWith(PAGE_ID)) await onPage(interaction);
+    if (interaction.isButton() && interaction.customId.startsWith(PAGE_ID)) await onPage(interaction);
   },
 };
 

@@ -21,9 +21,11 @@ import type {Server} from 'node:http';
 import {startAvatarServer} from './avatars';
 import {Config, ConfigError, loadConfig, setConfig} from './config';
 import {closeDb, db, dbLinkStore, openDb, startPurgeJob} from './db';
+import {type Command, CommandContext, CommandOptions, commandJSON, matchCommand, parseArgs, usageError} from './discord/commands';
 import {log, setLogLevel} from './log';
 import {startMemoryLog} from './memoryLog';
-import {BotModule, commandJSON} from './modules/types';
+import {SERVER_ONLY} from './modules/replies';
+import type {BotModule} from './modules/types';
 import {errorText} from './util';
 import {configureRegistry, loadAllSessions, stopAllSessions} from './vault/registry';
 
@@ -52,19 +54,21 @@ interface CommandPlan {
   global: RESTPostAPIApplicationCommandsJSONBody[];
   guild: RESTPostAPIApplicationCommandsJSONBody[];
   owner: Map<string, BotModule>;
+  commands: Map<string, Command>;
 }
 
 const planCommands = (list: BotModule[]): CommandPlan => {
-  const plan: CommandPlan = {global: [], guild: [], owner: new Map()};
+  const plan: CommandPlan = {global: [], guild: [], owner: new Map(), commands: new Map()};
   for (const m of list) {
     for (const c of m.commands) {
-      const json = commandJSON(c);
-      const other = plan.owner.get(json.name);
+      const other = plan.owner.get(c.def.name);
       if (other) {
-        log.error("Command '%s' is declared by both '%s' and '%s'; keeping '%s'.", json.name, other.name, m.name, other.name);
+        log.error("Command '%s' is declared by both '%s' and '%s'; keeping '%s'.", c.def.name, other.name, m.name, other.name);
         continue;
       }
-      plan.owner.set(json.name, m);
+      const json = commandJSON(c.def);
+      plan.owner.set(c.def.name, m);
+      plan.commands.set(c.def.name, c);
       (isDmCapable(json) ? plan.global : plan.guild).push(json);
     }
   }
@@ -81,15 +85,50 @@ const eachModule = async (list: BotModule[], what: string, run: (m: BotModule) =
   }
 };
 
-const replyFailure = async (interaction: Interaction): Promise<void> => {
-  if (!interaction.isRepliable()) return;
-  const content = '❌ Something went wrong running that command.';
+const FAILED = '❌ Something went wrong running that command.';
+
+const replyFailure = async (ctx: CommandContext): Promise<void> => {
   try {
-    if (interaction.replied || interaction.deferred) await interaction.followUp({content, flags: MessageFlags.Ephemeral});
-    else await interaction.reply({content, flags: MessageFlags.Ephemeral});
+    if (ctx.replied || ctx.deferred) await ctx.followUp({content: FAILED, flags: MessageFlags.Ephemeral});
+    else await ctx.reply({content: FAILED, flags: MessageFlags.Ephemeral});
   } catch (e) {
     log.debug('Could not report a command failure: %s', errorText(e));
   }
+};
+
+const replyInteractionFailure = async (interaction: Interaction): Promise<void> => {
+  if (!interaction.isRepliable()) return;
+  try {
+    if (interaction.replied || interaction.deferred) await interaction.followUp({content: FAILED, flags: MessageFlags.Ephemeral});
+    else await interaction.reply({content: FAILED, flags: MessageFlags.Ephemeral});
+  } catch (e) {
+    log.debug('Could not report a command failure: %s', errorText(e));
+  }
+};
+
+const isUserMessage = (message: Message): boolean => !message.author.bot && !message.webhookId && !message.system;
+
+const runCommand = async (command: Command, ctx: CommandContext, usage: string | null): Promise<void> => {
+  try {
+    if (!command.def.dm && !ctx.inGuild()) {
+      await ctx.reply({content: SERVER_ONLY, flags: MessageFlags.Ephemeral});
+      return;
+    }
+    if (usage !== null) {
+      await ctx.reply({content: usage, flags: MessageFlags.Ephemeral});
+      return;
+    }
+    await command.run(ctx);
+  } catch (e) {
+    log.exception(e, "Command '%s' failed.", command.def.name);
+    await replyFailure(ctx);
+  }
+};
+
+const runTextCommand = async (message: Message, command: Command, args: string): Promise<void> => {
+  const parsed = await parseArgs(command.def, args, {client: message.client, guild: message.guild}, message.attachments.first() ?? null);
+  const ctx = await CommandContext.fromMessage(message, command.def, parsed.ok ? parsed.options : new CommandOptions(null, new Map()));
+  await runCommand(command, ctx, parsed.ok ? null : usageError(command.def, parsed.sub, parsed.error));
 };
 
 const main = async (): Promise<void> => {
@@ -188,9 +227,10 @@ const main = async (): Promise<void> => {
     if (cfg.devGuildId && !c.guilds.cache.has(cfg.devGuildId)) log.warn('DEV_GUILD_ID %s is not a server this bot is in.', cfg.devGuildId);
 
     log.info(
-      "Ready. %d command(s) synced across %d server(s). If a command isn't visible, refresh Discord (Ctrl+R).",
+      "Ready. %d command(s) synced across %d server(s); text commands start with %s. If a command isn't visible, refresh Discord (Ctrl+R).",
       total,
       c.guilds.cache.size,
+      cfg.commandPrefix,
     );
 
     await eachModule(modules, 'in onReady', m => m.onReady?.(c));
@@ -211,29 +251,48 @@ const main = async (): Promise<void> => {
   });
 
   client.on(Events.InteractionCreate, async interaction => {
-    if (interaction.isCommand() || interaction.isAutocomplete()) {
-      const owner = plan.owner.get(interaction.commandName);
-      if (!owner) return;
+    if (interaction.isChatInputCommand()) {
+      const command = plan.commands.get(interaction.commandName);
+      if (!command) return;
+      let ctx: CommandContext;
       try {
-        await owner.onInteraction(interaction);
+        ctx = await CommandContext.fromInteraction(interaction, command.def);
       } catch (e) {
-        log.exception(e, "Command '/%s' failed in module '%s'.", interaction.commandName, owner.name);
-        if (!interaction.isAutocomplete()) await replyFailure(interaction);
+        log.exception(e, "Could not read the options of '/%s'.", interaction.commandName);
+        await replyInteractionFailure(interaction);
+        return;
+      }
+      await runCommand(command, ctx, null);
+      return;
+    }
+    if (interaction.isAutocomplete()) {
+      const owner = plan.owner.get(interaction.commandName);
+      try {
+        await owner?.onInteraction?.(interaction);
+      } catch (e) {
+        log.exception(e, "Autocomplete for '/%s' failed.", interaction.commandName);
       }
       return;
     }
     for (const m of modules) {
       try {
-        await m.onInteraction(interaction);
+        await m.onInteraction?.(interaction);
       } catch (e) {
         log.exception(e, "Module '%s' failed handling an interaction.", m.name);
-        await replyFailure(interaction);
+        await replyInteractionFailure(interaction);
         return;
       }
     }
   });
 
   client.on(Events.MessageCreate, async (message: Message) => {
+    if (isUserMessage(message)) {
+      const matched = matchCommand(message.content, plan.commands);
+      if (matched) {
+        await runTextCommand(message, matched.command, matched.args);
+        return;
+      }
+    }
     await eachModule(modules, 'handling a message', m => m.onMessage?.(message));
   });
 

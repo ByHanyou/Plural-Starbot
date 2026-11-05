@@ -11,19 +11,20 @@ Privacy Policy: https://github.com/ByHanyou/Plural-Starbot/blob/main/PRIVACY.md
 ## Requirements
 
 - Node.js 24.7 or newer.
-- A Discord application with a bot user. Under **Bot → Privileged Gateway Intents**, **Message Content Intent** must be on (proxying reads messages). The invite needs the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Manage Messages, Manage Webhooks, Embed Links, Attach Files, Read Message History, Add Reactions, Mention Everyone (optional, for role pings).
+- A Discord application with a bot user. Under **Bot → Privileged Gateway Intents**, **Message Content Intent** must be on (proxying and text commands read messages). The invite needs the `bot` and `applications.commands` scopes and these permissions: View Channels, Send Messages, Manage Messages, Manage Webhooks, Embed Links, Attach Files, Read Message History, Add Reactions, Mention Everyone (optional, for role pings).
 - A reachable Plural Star cloud node. The bot is meant to run on the same machine as the node and talks to it over localhost.
 - An HTTPS hostname on that machine for serving member avatars to Discord (the bot serves them itself; put the node's reverse proxy in front of it).
 
 ## Setup
 
-1. `npm install`
+1. `npm install` (this also fetches `sharp`, the image library, as a prebuilt binary for the machine; nothing else to install)
 2. Copy `.env.example` to `.env` and fill in:
    - `DISCORD_BOT_TOKEN` – the bot token from the Developer Portal.
    - `CLOUD_NODE_URL` – the node's base URL as seen from the bot, for example `http://127.0.0.1:7523`.
    - `AVATAR_BASE_URL` – the public HTTPS base under which the bot's avatar route is reachable, for example `https://node.example.org/starbot`.
    - `AVATAR_PORT` – local port the avatar server listens on (the reverse proxy forwards `AVATAR_BASE_URL` here).
    - `DATA_DIR` – where the bot keeps its SQLite database (links, server settings, the proxied-message table). With the systemd unit below it must be `/var/lib/plural-starbot`, the only directory the unit lets the bot write to.
+   - `COMMAND_PREFIX` – optional. What text commands start with; default `psb!`.
 3. `npm run build`, then `npm start`. For always-on hosting install `deploy/plural-starbot.service` next to the node's unit and `systemctl enable --now plural-starbot`.
 
 Runtime files (`.env`, the database) are git-ignored, as are working notes such as `SPEC.md`.
@@ -82,6 +83,10 @@ Type `/health` in any channel (requires Manage Server):
 
 `/help` (anywhere, including DMs) shows this whole command list inside Discord.
 
+### Text commands
+
+Every slash command also works as a plain message starting with `psb!` (`COMMAND_PREFIX`): `psb!front show`, `psb!member Harper`, `psb!autoproxy member name:Harper`. Options go as `name:value`; the first option can be given without its name. A reply that a slash command would show only to you is sent to you in a DM instead, and in a server the command message is deleted. `psb!link` answers with an **Enter password** button that opens the password pop-up, so the password is never typed into the chat.
+
 ### Linking your vault
 
 Send the bot a direct message and run `/link`; it asks for your Plural Star cloud password. The bot derives your vault key from it, registers itself as a device named "Plural Starbot" on your vault, and keeps only that key, the auth secret and the device key the node issues to it. The password itself is never stored. `/unlink` removes the device and deletes the key.
@@ -108,13 +113,17 @@ All of these work on your own vault with nothing extra typed: the bot knows whic
 
 Members marked private in Plural Star are shown only to their own system and are never named in front displays to others.
 
+### Editing profiles
+
+`/edit member <member> <field> [value] [image]` changes one field of one of your own members; `/edit system <field> [value] [image]` changes your system. Fields: `name`, `nickname`, `pronouns`, `role`, `color` (six hex digits), `emoji`, `description`, `avatar`, `banner`, or the name of one of your custom fields (number, true/false, color and date fields are checked the way the app reads them). `clear` as the value empties the field; a member's name cannot be cleared. For `avatar`, `banner`, image fields and the system avatar and banner, attach a file or give a link to a public image. The bot downloads it, re-encodes it the way the app does (avatars to 256 px JPEG, or PNG when the app keeps that member's avatar transparent; banners and field images to JPEG within 10000 px; GIFs as they are; 25 MB at most), encrypts it and stores it in your vault, where the app picks it up like any other change. Image links to private or local addresses are refused. As text commands the arguments are positional: `psb!edit member Harper pronouns she/her`, `psb!edit member "Harper Lee" description A longer text`, `psb!edit member Harper avatar` with the image attached, `psb!edit system name The Collective`. The reply is private when the member is private.
+
 ### Moderation log
 
 `/proxylog channel #channel` makes the bot copy every proxied message in the server to that channel as an embed with the member shown, the content, the sender as a clickable mention, message IDs and a jump link. `/proxylog off` stops it. Requires Manage Server.
 
 ## Data
 
-See the [Privacy Policy](https://github.com/ByHanyou/Plural-Starbot/blob/main/PRIVACY.md). In short: per linked user the bot stores the derived vault key, the auth secret and its device key; per server its settings; per proxied message a record kept 7 days (`PROXIED_RETENTION_DAYS`) so edit, delete and lookup work. Vault contents are read into memory and never written to disk.
+See the [Privacy Policy](https://github.com/ByHanyou/Plural-Starbot/blob/main/PRIVACY.md). In short: per linked user the bot stores the derived vault key, the auth secret and its device key; per server its settings; per proxied message a record kept 7 days (`PROXIED_RETENTION_DAYS`) so edit, delete and lookup work. Vault records are read into memory and never written to disk. Images stay in the cloud: the bot keeps only their object ids and fetches an image when it serves it, with a 64 MB cache in memory.
 
 ## Development
 
@@ -122,7 +131,7 @@ See the [Privacy Policy](https://github.com/ByHanyou/Plural-Starbot/blob/main/PR
 - `npm run build` – compile to `dist/`.
 - `npm run dev` – run from source with reload.
 
-The vault engine and the rich-text parser come from the Plural Star app. `src/cloud/cloudCrypto.ts`, `cloudApi.ts`, `cloudTypes.ts`, `cloudManifest.ts`, `cloudPlan.ts`, `sealedCache.ts` and `src/markdown/parse.ts` must stay byte-identical with the app's copies. `src/cloud/cloudVault.ts`, `cloudKeys.ts` and `cloudLinking.ts` differ from the app's copies only in their imports and logging calls, and must not drift further.
+The vault engine and the rich-text parser come from the Plural Star app. `src/cloud/cloudCrypto.ts`, `cloudApi.ts`, `cloudTypes.ts`, `cloudManifest.ts`, `cloudPlan.ts`, `sealedCache.ts` and `src/markdown/parse.ts` must stay byte-identical with the app's copies. `src/cloud/cloudKeys.ts` and `cloudLinking.ts` differ from the app's copies only in their imports and logging calls, and must not drift further. `src/cloud/cloudVault.ts` differs in the same way and additionally has the optional `deferMedia` and `mediaHashOf` platform hooks and the `fetchMedia` method, which keep images out of the bot's memory; nothing else in it may drift.
 
 ## License
 

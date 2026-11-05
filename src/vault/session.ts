@@ -1,11 +1,13 @@
 import {EventEmitter} from 'node:events';
 import {CloudApi} from '../cloud/cloudApi';
+import {bytesToBase64} from '../cloud/cloudCrypto';
+import {kindOf, tierOf} from '../cloud/cloudKeys';
 import {CloudError, CloudPhase, CloudTransport, isCloudKind} from '../cloud/cloudTypes';
 import {CloudService} from '../cloud/cloudVault';
 import {tunables} from '../config';
 import {log} from '../log';
 import {errorText, isRecord} from '../util';
-import {LinkStore, MemoryPlatform} from './platform';
+import {LinkStore, MemoryPlatform, parseMediaMarker} from './platform';
 import {linkSlots} from './throttle';
 import {VaultCreateRefused} from './transport';
 import {AppSettings, CustomFieldDef, FrontState, HistoryEntry, isRosterMember, MEDIA_PREFIX, Member, MemberGroup, SystemInfo, VAULT_KEYS} from './types';
@@ -350,9 +352,48 @@ export class VaultSession extends EventEmitter {
     return undefined;
   }
 
-  mediaDataUri(key: string): string | undefined {
-    const v = this.platform.get(key);
-    return v !== undefined && v.startsWith('data:') ? v : undefined;
+  mediaMime(key: string): string | undefined {
+    return parseMediaMarker(this.platform.get(key))?.mime;
+  }
+
+  readMedia(key: string): Promise<Uint8Array | null> {
+    const pending = this.platform.pendingMedia(key);
+    if (pending) return Promise.resolve(pending.bytes);
+    if (!parseMediaMarker(this.platform.get(key))) return Promise.resolve(null);
+    return this.service.fetchMedia(key);
+  }
+
+  private assertWritable(key: string): void {
+    this.assertUsable();
+    if (!this.hasData()) throw new CloudError(0, 'no data', NO_DATA_TEXT);
+    if (tierOf(kindOf(key)) !== 'base' && !this.service.status().mediaTier) {
+      throw new CloudError(0, 'no media tier', 'This vault link does not carry banners and custom-field images. Run `/unlink` and `/link` again, then retry.');
+    }
+  }
+
+  private pushOutcome(key: string, saved: boolean, replaced: boolean): PushResult {
+    if (replaced) return {ok: false, reason: 'conflict', replaced: [key], saved: []};
+    if (saved) return {ok: true};
+    const pending = this.service.isBusy();
+    return {ok: false, reason: pending ? 'pending' : 'failed', error: this.service.status().lastError};
+  }
+
+  async setMedia(key: string, mime: string, bytes: Uint8Array, timeoutMs = tunables().vaultSettleTimeoutMs): Promise<PushResult> {
+    this.assertWritable(key);
+    const hash = await this.platform.localHash(bytesToBase64(bytes));
+    this.platform.stageMedia(key, hash, mime, bytes);
+    this.service.schedulePush(0);
+    await this.settle(timeoutMs);
+    const marker = parseMediaMarker(this.platform.get(key));
+    return this.pushOutcome(key, this.platform.link()?.known[key]?.hash === hash, !marker || marker.hash !== hash);
+  }
+
+  async clearMedia(key: string, timeoutMs = tunables().vaultSettleTimeoutMs): Promise<PushResult> {
+    this.assertWritable(key);
+    this.platform.dropMedia(key);
+    this.service.schedulePush(0);
+    await this.settle(timeoutMs);
+    return this.pushOutcome(key, !this.platform.link()?.known[key], this.platform.get(key) !== undefined);
   }
 
   private runSync(phase: CloudPhase): Promise<void> {

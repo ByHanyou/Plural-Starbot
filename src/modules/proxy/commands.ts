@@ -1,17 +1,6 @@
-import {
-  ApplicationIntegrationType,
-  AutocompleteInteraction,
-  ChannelType,
-  ChatInputCommandInteraction,
-  escapeMarkdown,
-  InteractionContextType,
-  MessageFlags,
-  PermissionFlagsBits,
-  RESTJSONErrorCodes,
-  SlashCommandBuilder,
-  SlashCommandStringOption,
-} from 'discord.js';
+import {AutocompleteInteraction, escapeMarkdown, MessageFlags, PermissionFlagsBits, RESTJSONErrorCodes} from 'discord.js';
 import {CloudError, isCloudKind} from '../../cloud/cloudTypes';
+import type {Command, CommandContext, OptionDef} from '../../discord/commands';
 import {tunables} from '../../config';
 import {db} from '../../db';
 import {log} from '../../log';
@@ -45,86 +34,17 @@ const retentionText = (): string => {
   return d === 1 ? '1 day' : `${d} days`;
 };
 
-export const autoproxyCommand = new SlashCommandBuilder()
-  .setName('autoproxy')
-  .setDescription('Proxy your messages in this server without proxy tags')
-  .addSubcommand(s => s.setName('off').setDescription('Turn autoproxy off in this server'))
-  .addSubcommand(s => s.setName('front').setDescription('Proxy as the first listed primary fronter'))
-  .addSubcommand(s =>
-    s
-      .setName('member')
-      .setDescription('Proxy as one member')
-      .addStringOption(o => o.setName('name').setDescription('Member name').setRequired(true).setMaxLength(100).setAutocomplete(true)),
-  )
-  .addSubcommand(s => s.setName('latch').setDescription(`Proxy as the member of your last proxied message in this server, for up to ${tunables().latchHours} hours`));
+const scopeOption: OptionDef = {
+  name: 'scope',
+  description: 'Where it applies (default: everywhere)',
+  type: 'string',
+  choices: [
+    {name: 'everywhere', value: SCOPE_EVERYWHERE},
+    {name: 'this server', value: SCOPE_SERVER},
+  ],
+};
 
-const scopeOption = (o: SlashCommandStringOption): SlashCommandStringOption =>
-  o
-    .setName('scope')
-    .setDescription('Where it applies (default: everywhere)')
-    .addChoices({name: 'everywhere', value: SCOPE_EVERYWHERE}, {name: 'this server', value: SCOPE_SERVER});
-
-export const proxyCommand = new SlashCommandBuilder()
-  .setName('proxy')
-  .setDescription('Your proxied messages')
-  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
-  .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM)
-  .addSubcommand(s =>
-    s
-      .setName('edit')
-      .setDescription('Edit your last proxied message in this channel, or one you name by ID')
-      .addStringOption(o => o.setName('text').setDescription('The new text').setRequired(true).setMaxLength(MESSAGE_LIMIT))
-      .addStringOption(o => o.setName('message_id').setDescription('ID of a proxied message of yours (default: your last one here)').setMaxLength(25)),
-  )
-  .addSubcommand(s =>
-    s
-      .setName('format')
-      .setDescription('Set how your proxied messages are named, for all members or one, or show the current format')
-      .addStringOption(o =>
-        o
-          .setName('member')
-          .setDescription('One member (emoji or name) to set or show their own format, used instead of yours')
-          .setMaxLength(100)
-          .setAutocomplete(true),
-      )
-      .addStringOption(o =>
-        o
-          .setName('template')
-          .setDescription('Formatting tags: {Emoji} {Name} {Pronouns} {Role} {Sys Tag}. Other text is kept. "default" resets')
-          .setMaxLength(FORMAT_MAX_LENGTH),
-      )
-      .addStringOption(scopeOption),
-  )
-  .addSubcommand(s =>
-    s
-      .setName('systag')
-      .setDescription('Set the Sys Tag that {Sys Tag} fills in your proxy format, or show it')
-      .addStringOption(o => o.setName('text').setDescription(`Up to ${SYS_TAG_MAX} characters. "clear" removes it`))
-      .addStringOption(scopeOption),
-  )
-  .addSubcommand(s =>
-    s
-      .setName('pings')
-      .setDescription('Turn 🔔 reaction pings on your proxied messages on or off, or show the setting')
-      .addStringOption(o => o.setName('state').setDescription('on or off').addChoices({name: 'on', value: PINGS_ON}, {name: 'off', value: PINGS_OFF}))
-      .addStringOption(scopeOption),
-  );
-
-export const proxylogCommand = new SlashCommandBuilder()
-  .setName('proxylog')
-  .setDescription('Log every proxied message in this server to a channel')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-  .addSubcommand(s =>
-    s
-      .setName('channel')
-      .setDescription('Channel proxied messages are logged in')
-      .addChannelOption(o =>
-        o.setName('channel').setDescription('Log channel').setRequired(true).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement),
-      ),
-  )
-  .addSubcommand(s => s.setName('off').setDescription('Stop logging proxied messages'));
-
-const sessionOrSay = async (i: ChatInputCommandInteraction): Promise<VaultSession | null> => {
+const sessionOrSay = async (i: CommandContext): Promise<VaultSession | null> => {
   try {
     const session = await linkedSession(i.user.id);
     if (session) return session;
@@ -136,7 +56,7 @@ const sessionOrSay = async (i: ChatInputCommandInteraction): Promise<VaultSessio
   return null;
 };
 
-const vaultReadFailure = (i: ChatInputCommandInteraction, e: unknown): string => {
+const vaultReadFailure = (i: CommandContext, e: unknown): string => {
   if (!(e instanceof CloudError)) log.exception(e, 'Could not read the vault of %s.', i.user.id);
   return isCloudKind(e, 'LINK_BROKEN') ? `❌ ${LINK_BROKEN_TEXT}` : `❌ Could not read your vault: ${errorText(e)}`;
 };
@@ -146,7 +66,7 @@ const latchStateLine = (guildId: string, userId: string, session: VaultSession):
   return member ? `latch: currently **${escapeMarkdown(displayNameOf(member))}**` : `latch: none (nothing proxied in the last ${tunables().latchHours} hours)`;
 };
 
-export const handleAutoproxy = async (i: ChatInputCommandInteraction): Promise<void> => {
+export const handleAutoproxy = async (i: CommandContext): Promise<void> => {
   if (!i.inGuild()) {
     await i.reply({content: SERVER_ONLY, flags: MessageFlags.Ephemeral});
     return;
@@ -259,7 +179,7 @@ const previewLine = async (userId: string, names: NameSettings): Promise<string>
   return first ? memberPreviewLine(first, names) : 'Your vault has no member to show a preview with.';
 };
 
-const saveTarget = async (i: ChatInputCommandInteraction, saving: boolean): Promise<string | null | undefined> => {
+const saveTarget = async (i: CommandContext, saving: boolean): Promise<string | null | undefined> => {
   if (i.options.getString('scope') !== SCOPE_SERVER) return null;
   if (i.inGuild()) return i.guildId;
   if (!saving) return null;
@@ -270,12 +190,12 @@ const saveTarget = async (i: ChatInputCommandInteraction, saving: boolean): Prom
 type Say = (lines: string[]) => Promise<void>;
 
 const sayLines =
-  (i: ChatInputCommandInteraction): Say =>
+  (i: CommandContext): Say =>
   async lines => {
     await i.editReply({content: lines.join('\n'), allowedMentions: {parse: []}});
   };
 
-const formatMemberOrSay = async (i: ChatInputCommandInteraction, query: string, say: Say): Promise<Member | null> => {
+const formatMemberOrSay = async (i: CommandContext, query: string, say: Say): Promise<Member | null> => {
   const session = await sessionOrSay(i);
   if (!session) return null;
   try {
@@ -302,7 +222,7 @@ const formatMemberOrSay = async (i: ChatInputCommandInteraction, query: string, 
 };
 
 const handleMemberFormat = async (
-  i: ChatInputCommandInteraction,
+  i: CommandContext,
   query: string,
   raw: string | null,
   target: string | null,
@@ -345,7 +265,7 @@ const handleMemberFormat = async (
   await say(lines);
 };
 
-const handleFormat = async (i: ChatInputCommandInteraction): Promise<void> => {
+const handleFormat = async (i: CommandContext): Promise<void> => {
   const raw = i.options.getString('template');
   const target = await saveTarget(i, raw !== null);
   if (target === undefined) return;
@@ -392,7 +312,7 @@ const unusedSysTagNote = (names: NameSettings): string[] =>
     ? [`Your proxy name format ${shown(names.format.value)} has no {Sys Tag}, so the Sys Tag is not shown. Add it with \`/proxy format\`.`]
     : [];
 
-const handleSysTag = async (i: ChatInputCommandInteraction): Promise<void> => {
+const handleSysTag = async (i: CommandContext): Promise<void> => {
   const raw = i.options.getString('text');
   const target = await saveTarget(i, raw !== null);
   if (target === undefined) return;
@@ -440,7 +360,7 @@ const PINGS_MEANING: Record<string, string> = {
   [PINGS_OFF]: 'Reacting 🔔 to one of your proxied messages does not ping you; the person who reacted gets a DM with your mention instead.',
 };
 
-const handlePings = async (i: ChatInputCommandInteraction): Promise<void> => {
+const handlePings = async (i: CommandContext): Promise<void> => {
   const raw = i.options.getString('state');
   const target = await saveTarget(i, raw !== null);
   if (target === undefined) return;
@@ -462,7 +382,7 @@ const handlePings = async (i: ChatInputCommandInteraction): Promise<void> => {
   await i.reply({content: lines.filter(Boolean).join('\n'), flags: MessageFlags.Ephemeral});
 };
 
-export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void> => {
+export const handleProxy = async (i: CommandContext): Promise<void> => {
   const sub = i.options.getSubcommand();
   if (sub === 'format') {
     await handleFormat(i);
@@ -551,7 +471,7 @@ export const handleProxy = async (i: ChatInputCommandInteraction): Promise<void>
   await i.editReply({content: `✅ Edited ${link}.`});
 };
 
-export const handleProxylog = async (i: ChatInputCommandInteraction): Promise<void> => {
+export const handleProxylog = async (i: CommandContext): Promise<void> => {
   if (!i.inCachedGuild()) {
     await i.reply({content: SERVER_ONLY, flags: MessageFlags.Ephemeral});
     return;
@@ -566,7 +486,7 @@ export const handleProxylog = async (i: ChatInputCommandInteraction): Promise<vo
     await i.reply({content: 'Proxied messages are no longer logged in this server.', flags: MessageFlags.Ephemeral});
     return;
   }
-  const channel = i.options.getChannel('channel', true, [ChannelType.GuildText, ChannelType.GuildAnnouncement]);
+  const channel = i.options.getChannel('channel', true);
   const me = i.guild.members.me ?? (await orNull(i.guild.members.fetchMe(), `Fetching the bot's own member in '${i.guild.name}'`));
   const perms = me ? channel.permissionsFor(me) : null;
   const missing = (
@@ -584,4 +504,99 @@ export const handleProxylog = async (i: ChatInputCommandInteraction): Promise<vo
   }
   setLogChannel(i.guildId, channel.id);
   await i.reply({content: `Proxied messages in this server are now logged in ${channel}.`, flags: MessageFlags.Ephemeral});
+};
+
+export const autoproxyCommand: Command = {
+  def: {
+    name: 'autoproxy',
+    description: 'Proxy your messages in this server without proxy tags',
+    subcommands: [
+      {name: 'off', description: 'Turn autoproxy off in this server'},
+      {name: 'front', description: 'Proxy as the first listed primary fronter'},
+      {
+        name: 'member',
+        description: 'Proxy as one member',
+        options: [{name: 'name', description: 'Member name', type: 'string', required: true, maxLength: 100, autocomplete: true}],
+      },
+      {name: 'latch', description: `Proxy as the member of your last proxied message in this server, for up to ${tunables().latchHours} hours`},
+    ],
+  },
+  run: handleAutoproxy,
+};
+
+export const proxyCommand: Command = {
+  def: {
+    name: 'proxy',
+    description: 'Your proxied messages',
+    dm: true,
+    subcommands: [
+      {
+        name: 'edit',
+        description: 'Edit your last proxied message in this channel, or one you name by ID',
+        options: [
+          {name: 'text', description: 'The new text', type: 'string', required: true, maxLength: MESSAGE_LIMIT},
+          {name: 'message_id', description: 'ID of a proxied message of yours (default: your last one here)', type: 'string', maxLength: 25},
+        ],
+      },
+      {
+        name: 'format',
+        description: 'Set how your proxied messages are named, for all members or one, or show the current format',
+        options: [
+          {
+            name: 'member',
+            description: 'One member (emoji or name) to set or show their own format, used instead of yours',
+            type: 'string',
+            maxLength: 100,
+            autocomplete: true,
+          },
+          {
+            name: 'template',
+            description: 'Formatting tags: {Emoji} {Name} {Pronouns} {Role} {Sys Tag}. Other text is kept. "default" resets',
+            type: 'string',
+            maxLength: FORMAT_MAX_LENGTH,
+          },
+          scopeOption,
+        ],
+      },
+      {
+        name: 'systag',
+        description: 'Set the Sys Tag that {Sys Tag} fills in your proxy format, or show it',
+        options: [{name: 'text', description: `Up to ${SYS_TAG_MAX} characters. "clear" removes it`, type: 'string'}, scopeOption],
+      },
+      {
+        name: 'pings',
+        description: 'Turn 🔔 reaction pings on your proxied messages on or off, or show the setting',
+        options: [
+          {
+            name: 'state',
+            description: 'on or off',
+            type: 'string',
+            choices: [
+              {name: 'on', value: PINGS_ON},
+              {name: 'off', value: PINGS_OFF},
+            ],
+          },
+          scopeOption,
+        ],
+      },
+    ],
+  },
+  run: handleProxy,
+};
+
+export const proxylogCommand: Command = {
+  def: {
+    name: 'proxylog',
+    description: 'Log every proxied message in this server to a channel',
+    permissions: PermissionFlagsBits.ManageGuild,
+    subcommands: [
+      {
+        name: 'channel',
+        description: 'Channel proxied messages are logged in',
+        options: [{name: 'channel', description: 'Log channel', type: 'channel', required: true}],
+      },
+      {name: 'off', description: 'Stop logging proxied messages'},
+    ],
+  },
+  run: handleProxylog,
 };
